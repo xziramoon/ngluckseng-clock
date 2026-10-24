@@ -1,0 +1,310 @@
+{
+  "rules": {
+    "attendance": {
+      "admins": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+          ".validate": "newData.isBoolean()"
+        }
+      },
+      "settings": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "lateGraceMin": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 120"
+        },
+        "$other": {
+          ".validate": false
+        }
+      },
+      "branches": {
+        ".read": "auth != null",
+        "$bid": {
+          ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+          ".validate": "$bid.matches(/^[a-z0-9_-]{1,32}$/) && newData.hasChildren(['name','radius','maxAccuracy','graceFactor','breakLimitMin'])",
+          "name": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 40"
+          },
+          "lat": {
+            ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+          },
+          "lng": {
+            ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+          },
+          "radius": {
+            ".validate": "newData.isNumber() && newData.val() >= 30 && newData.val() <= 300"
+          },
+          "maxAccuracy": {
+            ".validate": "newData.isNumber() && newData.val() >= 5 && newData.val() <= 500"
+          },
+          "graceFactor": {
+            ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 3"
+          },
+          "breakLimitMin": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 600"
+          },
+          "active": {
+            ".validate": "newData.isBoolean()"
+          },
+          "updatedAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      "staff": {
+        ".read": "auth != null",
+        "$sid": {
+          ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+          ".validate": "$sid.matches(/^[-_A-Za-z0-9]{1,40}$/) && newData.hasChildren(['nickname','branchId','shiftStart','active'])",
+          "nickname": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 20"
+          },
+          "branchId": {
+            ".validate": "newData.isString() && newData.parent().parent().parent().child('branches/' + newData.val()).exists()"
+          },
+          "shiftStart": {
+            ".validate": "newData.isString() && newData.val().matches(/^([01][0-9]|2[0-3]):[0-5][0-9]$/)"
+          },
+          "active": {
+            ".validate": "newData.isBoolean()"
+          },
+          "uid": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 128"
+          },
+          "deviceApproved": {
+            ".validate": "newData.isBoolean()"
+          },
+          "deviceApprovedAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "createdAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      "staffSecret": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "$sid": {
+          ".validate": "newData.hasChildren(['pinHash'])",
+          "pinHash": {
+            ".validate": "newData.isString() && newData.val().matches(/^[0-9a-f]{64}$/)"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      "deviceRequests": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "$uid": {
+          ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (auth != null && auth.uid === $uid)",
+          ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (auth != null && auth.uid === $uid && (!newData.exists() || !data.exists() || data.child('status').val() === 'rejected'))",
+          ".validate": "newData.hasChildren(['staffId','pinHash','requestedAt','status'])",
+          "staffId": {
+            ".validate": "newData.isString() && root.child('attendance/staff/' + newData.val() + '/active').val() === true"
+          },
+          "pinHash": {
+            ".validate": "newData.isString() && newData.val().matches(/^[0-9a-f]{64}$/)"
+          },
+          "requestedAt": {
+            ".validate": "newData.isNumber() && (newData.val() === now || (auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) || newData.val() === data.val())"
+          },
+          "status": {
+            ".validate": "newData.val() === 'pending' || ((auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) && newData.val() === 'rejected')"
+          },
+          "userAgent": {
+            ".validate": "newData.isString() && newData.val().length >= 0 && newData.val().length <= 300"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      "state": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "$sid": {
+          ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (auth != null && root.child('attendance/staff/' + $sid + '/uid').val() === auth.uid)",
+          ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (auth != null && root.child('attendance/staff/' + $sid + '/uid').val() === auth.uid && root.child('attendance/staff/' + $sid + '/active').val() === true && root.child('attendance/staff/' + $sid + '/deviceApproved').val() === true && newData.exists())",
+          ".validate": "newData.hasChildren(['status','workDate','since']) && ((auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) || (newData.hasChildren(['inAt','lastLogId']) && newData.child('since').val() === now && newData.parent().parent().child('logs/' + newData.child('workDate').val() + '/' + $sid + '/' + newData.child('lastLogId').val() + '/ts').val() === now))",
+          "status": {
+            ".validate": "newData.val() === 'off' || newData.val() === 'working' || newData.val() === 'on_break' || newData.val() === 'done'"
+          },
+          "workDate": {
+            ".validate": "newData.isString() && newData.val().matches(/^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/)"
+          },
+          "since": {
+            ".validate": "newData.isNumber()"
+          },
+          "inAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "lastLogId": {
+            ".validate": "newData.isString() && newData.val().matches(/^[-_A-Za-z0-9]{1,40}$/)"
+          },
+          "lastLat": {
+            ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+          },
+          "lastLng": {
+            ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+          },
+          "lastBranchId": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 32"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      "logs": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "$d": {
+          "$sid": {
+            ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (auth != null && root.child('attendance/staff/' + $sid + '/uid').val() === auth.uid)",
+            "$lid": {
+              ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (auth != null && root.child('attendance/staff/' + $sid + '/uid').val() === auth.uid && root.child('attendance/staff/' + $sid + '/active').val() === true && root.child('attendance/staff/' + $sid + '/deviceApproved').val() === true && !data.exists() && newData.exists() && root.child('attendance/days/' + $d + '/' + $sid + '/confirmed').val() !== true)",
+              ".validate": "$d.matches(/^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/) && $lid.matches(/^[-_A-Za-z0-9]{1,40}$/) && newData.hasChildren(['type','ts','branchId','source']) && ((auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) || (newData.child('source').val() === 'app' && newData.hasChildren(['lat','lng','accuracy','distance','uid']) && newData.child('accuracy').val() >= 0 && newData.child('distance').val() <= root.child('attendance/branches/' + newData.child('branchId').val() + '/radius').val() * root.child('attendance/branches/' + newData.child('branchId').val() + '/graceFactor').val() && newData.parent().parent().parent().parent().child('state/' + $sid).child('lastLogId').val() === $lid && newData.parent().parent().parent().parent().child('state/' + $sid).child('since').val() === now && (!root.child('attendance/state/' + $sid).exists() || now - root.child('attendance/state/' + $sid).child('since').val() >= 30000) && ((newData.child('type').val() === 'in' && (!root.child('attendance/state/' + $sid).exists() || root.child('attendance/state/' + $sid).child('status').val() === 'off' || (root.child('attendance/state/' + $sid).child('status').val() === 'done' && root.child('attendance/state/' + $sid).child('workDate').val() !== $d) || ((root.child('attendance/state/' + $sid).child('status').val() === 'working' || root.child('attendance/state/' + $sid).child('status').val() === 'on_break') && now - root.child('attendance/state/' + $sid).child('inAt').val() > 57600000)) && newData.parent().parent().parent().parent().child('state/' + $sid).child('status').val() === 'working' && newData.parent().parent().parent().parent().child('state/' + $sid).child('workDate').val() === $d && newData.parent().parent().parent().parent().child('state/' + $sid).child('inAt').val() === now) || (newData.child('type').val() === 'break_start' && root.child('attendance/state/' + $sid).child('status').val() === 'working' && root.child('attendance/state/' + $sid).child('workDate').val() === $d && newData.parent().parent().parent().parent().child('state/' + $sid).child('status').val() === 'on_break' && newData.parent().parent().parent().parent().child('state/' + $sid).child('workDate').val() === $d && newData.parent().parent().parent().parent().child('state/' + $sid).child('inAt').val() === root.child('attendance/state/' + $sid).child('inAt').val()) || (newData.child('type').val() === 'break_end' && root.child('attendance/state/' + $sid).child('status').val() === 'on_break' && root.child('attendance/state/' + $sid).child('workDate').val() === $d && newData.parent().parent().parent().parent().child('state/' + $sid).child('status').val() === 'working' && newData.parent().parent().parent().parent().child('state/' + $sid).child('workDate').val() === $d && newData.parent().parent().parent().parent().child('state/' + $sid).child('inAt').val() === root.child('attendance/state/' + $sid).child('inAt').val()) || (newData.child('type').val() === 'out' && root.child('attendance/state/' + $sid).child('status').val() === 'working' && root.child('attendance/state/' + $sid).child('workDate').val() === $d && newData.parent().parent().parent().parent().child('state/' + $sid).child('status').val() === 'done' && newData.parent().parent().parent().parent().child('state/' + $sid).child('workDate').val() === $d && newData.parent().parent().parent().parent().child('state/' + $sid).child('inAt').val() === root.child('attendance/state/' + $sid).child('inAt').val()))))",
+              "type": {
+                ".validate": "newData.val() === 'in' || newData.val() === 'break_start' || newData.val() === 'break_end' || newData.val() === 'out'"
+              },
+              "ts": {
+                ".validate": "newData.isNumber() && (newData.val() === now || (auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true))"
+              },
+              "lat": {
+                ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+              },
+              "lng": {
+                ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+              },
+              "accuracy": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000"
+              },
+              "distance": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 20000000"
+              },
+              "branchId": {
+                ".validate": "newData.isString() && root.child('attendance/branches/' + newData.val()).exists()"
+              },
+              "uid": {
+                ".validate": "newData.isString() && (newData.val() === auth.uid || (auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true))"
+              },
+              "source": {
+                ".validate": "newData.val() === 'app' || ((auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) && newData.val() === 'admin')"
+              },
+              "flag": {
+                ".validate": "newData.val() === 'borderline' || newData.val() === 'suspect'"
+              },
+              "flagReason": {
+                ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 100"
+              },
+              "clientTs": {
+                ".validate": "newData.isNumber()"
+              },
+              "review": {
+                ".validate": "(auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) && (newData.val() === 'approved' || newData.val() === 'rejected')"
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          }
+        }
+      },
+      "days": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "$d": {
+          "$sid": {
+            "confirmed": {
+              ".validate": "newData.isBoolean()"
+            },
+            "confirmedBy": {
+              ".validate": "newData.isString()"
+            },
+            "confirmedAt": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      },
+      "corrections": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (auth != null && query.orderByChild === 'staffId' && query.equalTo != null && root.child('attendance/staff/' + query.equalTo + '/uid').val() === auth.uid)",
+        ".indexOn": [
+          "staffId",
+          "status"
+        ],
+        "$cid": {
+          ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (data.exists() && auth != null && root.child('attendance/staff/' + data.child('staffId').val() + '/uid').val() === auth.uid)",
+          ".write": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true || (!data.exists() && newData.exists() && auth != null && root.child('attendance/staff/' + newData.child('staffId').val() + '/uid').val() === auth.uid && root.child('attendance/staff/' + newData.child('staffId').val() + '/active').val() === true && root.child('attendance/staff/' + newData.child('staffId').val() + '/deviceApproved').val() === true)",
+          ".validate": "$cid.matches(/^[-_A-Za-z0-9]{1,40}$/) && newData.hasChildren(['staffId','workDate','type','time','reason','status','createdAt'])",
+          "staffId": {
+            ".validate": "newData.isString() && ((auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) || root.child('attendance/staff/' + newData.val() + '/uid').val() === auth.uid)"
+          },
+          "workDate": {
+            ".validate": "newData.isString() && newData.val().matches(/^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/)"
+          },
+          "type": {
+            ".validate": "newData.val() === 'in' || newData.val() === 'break_start' || newData.val() === 'break_end' || newData.val() === 'out'"
+          },
+          "time": {
+            ".validate": "newData.isString() && newData.val().matches(/^([01][0-9]|2[0-3]):[0-5][0-9]$/)"
+          },
+          "reason": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 300"
+          },
+          "status": {
+            ".validate": "newData.val() === 'pending' || ((auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) && (newData.val() === 'approved' || newData.val() === 'rejected'))"
+          },
+          "createdAt": {
+            ".validate": "newData.isNumber() && (newData.val() === now || (auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true))"
+          },
+          "decidedBy": {
+            ".validate": "newData.isString()"
+          },
+          "decidedAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      "audit": {
+        ".read": "auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true",
+        "$aid": {
+          ".write": "(auth != null && auth.token.firebase.sign_in_provider !== 'anonymous' && root.child('attendance/admins/' + auth.uid).val() === true) && !data.exists()",
+          ".validate": "newData.hasChildren(['path','by','at']) && newData.child('by').val() === auth.uid && newData.child('at').val() === now",
+          "path": {
+            ".validate": "newData.isString()"
+          },
+          "by": {
+            ".validate": "newData.isString()"
+          },
+          "at": {
+            ".validate": "newData.isNumber()"
+          },
+          "before": {
+            ".validate": true
+          },
+          "after": {
+            ".validate": true
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    }
+  }
+}

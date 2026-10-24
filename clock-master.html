@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>จัดการลงเวลา - อึ้งลักเส็ง</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;font-size:16px;color:#1f2937;background:#f3f4f6}
+button,input,select{font:inherit}
+.hidden{display:none!important}
+.muted{color:#6b7280}
+/* ล็อกอิน */
+#login{max-width:380px;margin:12vh auto;background:#fff;padding:28px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.12)}
+#login h1{margin:0 0 4px;font-size:22px}
+#login label{display:block;margin:14px 0 4px;font-weight:600}
+#login input{width:100%;padding:10px;border:1px solid #9ca3af;border-radius:8px}
+.err{color:#b91c1c;margin:10px 0 0;min-height:1.2em}
+.notice{color:#92400e;background:#fef3c7;padding:8px 10px;border-radius:8px;margin-top:10px}
+/* โครงหน้า */
+#app{display:flex;min-height:100vh}
+#side{width:210px;background:#14532d;color:#fff;padding:14px 10px;display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+#side h2{font-size:17px;margin:4px 8px 12px}
+#side button.tab{background:transparent;border:0;color:#fff;text-align:left;padding:11px 12px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+#side button.tab.on{background:#16a34a}
+#side button.tab:hover{background:#15803d}
+.badge{background:#dc2626;color:#fff;border-radius:999px;padding:0 8px;font-size:13px;min-width:22px;text-align:center}
+#side .sp{flex:1}
+#side .who{font-size:13px;opacity:.8;margin:6px 8px;word-break:break-all}
+#side button.lock{background:#fff;color:#14532d;border:0;border-radius:8px;padding:10px;cursor:pointer;font-weight:700}
+#main{flex:1;padding:20px;min-width:0}
+#idlewarn{position:fixed;top:0;left:0;right:0;background:#f59e0b;color:#111;text-align:center;padding:10px;z-index:3000;font-weight:700}
+h3{margin:0 0 12px}
+.card{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.1);margin-bottom:14px}
+.btn{border:0;border-radius:8px;padding:8px 14px;cursor:pointer;background:#16a34a;color:#fff;font-weight:600}
+.btn:disabled{background:#d1d5db;color:#6b7280;cursor:not-allowed}
+.btn.red{background:#dc2626}.btn.gray{background:#6b7280}.btn.blue{background:#2563eb}.btn.orange{background:#ea580c}
+.btn.small{padding:5px 10px;font-size:14px}
+input[type=text],input[type=number],input[type=password],select{padding:7px 9px;border:1px solid #9ca3af;border-radius:6px;background:#fff}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:8px 0}
+.row label{display:flex;flex-direction:column;font-size:14px;gap:3px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden}
+th,td{padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:middle}
+th{background:#f9fafb;font-size:14px}
+/* สถานะวันนี้ */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.person{border-radius:10px;padding:10px 12px;background:#e5e7eb;border:3px solid transparent}
+.person .nm{font-weight:700;font-size:18px}
+.person .tx{font-size:15px;margin-top:2px}
+.person.s-none{background:#e5e7eb;color:#4b5563}
+.person.s-work{background:#dcfce7}
+.person.s-break{background:#dbeafe}
+.person.s-break.over{background:#fed7aa}
+.person.s-done{background:#9ca3af;color:#111}
+.person.s-stale{background:#fecaca}
+.person.late{border-color:#f97316}
+.tag{display:inline-block;font-size:12px;padding:1px 7px;border-radius:999px;margin:3px 3px 0 0;background:#fff;border:1px solid #9ca3af}
+.tag.late{background:#fff7ed;border-color:#f97316;color:#c2410c}
+.tag.bad{background:#fef2f2;border-color:#dc2626;color:#b91c1c}
+.tag.ok{background:#f0fdf4;border-color:#16a34a;color:#166534}
+.req{display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;align-items:center}
+.req .ua{font-size:12px;color:#6b7280;word-break:break-all;max-width:520px}
+.map{height:300px;border-radius:8px;margin:8px 0}
+/* modal */
+#modalbg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:2000}
+#modal{background:#fff;border-radius:12px;padding:20px;min-width:320px;max-width:92vw}
+#modal h3{margin-top:0}
+#modal .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+@media(max-width:700px){#app{flex-direction:column}#side{width:auto;flex-direction:row;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+
+<section id="login" class="hidden">
+  <h1>จัดการลงเวลา</h1>
+  <div class="muted">ร้านอึ้งลักเส็ง · สำหรับเจ้าของร้าน</div>
+  <form id="loginForm" autocomplete="on">
+    <label for="em">อีเมล</label>
+    <input id="em" type="email" autocomplete="username" required>
+    <label for="pw">รหัสผ่าน</label>
+    <input id="pw" type="password" autocomplete="current-password" required>
+    <p class="err" id="loginErr" role="alert"></p>
+    <button class="btn" id="loginBtn" type="submit" style="width:100%;margin-top:6px;padding:11px">เข้าสู่ระบบ</button>
+  </form>
+  <div id="cfgMissing" class="notice hidden">ยังไม่ได้ตั้งค่า Firebase ที่ด้านบนของไฟล์นี้ (FIREBASE_CONFIG) ดูวิธีทำใน README</div>
+</section>
+
+<div id="app" class="hidden">
+  <nav id="side">
+    <h2>ลงเวลา · เจ้าของ</h2>
+    <button class="tab on" data-tab="today">สถานะวันนี้</button>
+    <button class="tab" data-tab="pending">รอตรวจ <span class="badge hidden" id="pendBadge">0</span></button>
+    <button class="tab" data-tab="staff">พนักงาน</button>
+    <button class="tab" data-tab="branches">ตั้งค่าสาขา</button>
+    <div class="sp"></div>
+    <div class="who" id="who"></div>
+    <button class="lock" id="lockBtn">ล็อกหน้าจอ</button>
+  </nav>
+  <main id="main">
+    <section id="p-today"></section>
+    <section id="p-pending" class="hidden"></section>
+    <section id="p-staff" class="hidden"></section>
+    <section id="p-branches" class="hidden"></section>
+  </main>
+</div>
+<div id="idlewarn" class="hidden">จะออกจากระบบอัตโนมัติใน 1 นาที เพราะไม่ได้ใช้งาน (ขยับเมาส์เพื่อใช้งานต่อ)</div>
+<div id="modalbg" class="hidden"><div id="modal"></div></div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
+import { getAuth, setPersistence, browserSessionPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator }
+  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
+import { getDatabase, ref, onValue, get, update, set, remove, push, serverTimestamp, connectDatabaseEmulator }
+  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js';
+
+/* ====== ตั้งค่า Firebase (เจ้าของใส่เอง ดู README ข้อ 7) ====== */
+const FIREBASE_CONFIG = {
+  apiKey: 'PASTE_HERE',
+  authDomain: 'PASTE_HERE',
+  databaseURL: 'PASTE_HERE',
+  projectId: 'PASTE_HERE',
+  appId: 'PASTE_HERE'
+};
+
+const EMU = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).get('emu') === '1';
+const CONFIG_MISSING = !EMU && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
+const IDLE_MS = 30 * 60 * 1000;
+const STALE_MS = 16 * 3600 * 1000;
+
+const $ = (s, r = document) => r.querySelector(s);
+/** สร้าง element ด้วย textContent เท่านั้น (ห้ามใช้ innerHTML กับข้อมูลจาก DB) */
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k.startsWith('.')) e[k.slice(1)] = v;
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const c of kids.flat(Infinity)) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(String(c))); }
+  return e;
+}
+const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+
+if (CONFIG_MISSING) {
+  $('#login').classList.remove('hidden');
+  $('#cfgMissing').classList.remove('hidden');
+  $('#loginBtn').disabled = true;
+  throw new Error('FIREBASE_CONFIG ยังไม่ได้ตั้งค่า');
+}
+
+// ใช้ชื่อ app 'master' แยกจาก clock.html เพื่อไม่ให้แชร์ auth/ตัวตนเครื่องพนักงานเมื่อเปิดบน origin เดียวกัน
+const app = initializeApp(EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG, 'master');
+const auth = getAuth(app);
+const db = getDatabase(app);
+if (EMU) { connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true }); connectDatabaseEmulator(db, '127.0.0.1', 9000); }
+await setPersistence(auth, browserSessionPersistence);
+
+/* ====== เวลา / ฟอร์แมต ====== */
+let serverOffset = 0;
+const serverNow = () => Date.now() + serverOffset;
+const fmtTimeF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
+const bkkDateF = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' });
+const fmtTime = (ms) => fmtTimeF.format(ms);
+const bangkokDate = (ms) => bkkDateF.format(ms);
+function fmtMin(totalMin) { totalMin = Math.max(0, Math.round(totalMin)); const hh = Math.floor(totalMin / 60), mm = totalMin % 60; return hh ? `${hh} ชม. ${String(mm).padStart(2, '0')} น.` : `${mm} นาที`; }
+function fmtClock(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const A = (p) => ref(db, 'attendance/' + p);
+
+/* ====== modal ====== */
+function openModal(title, bodyNodes, buttons) {
+  const m = $('#modal'); clear(m);
+  m.append(h('h3', null, title), ...[].concat(bodyNodes));
+  const acts = h('div', { class: 'acts' });
+  for (const b of buttons) acts.append(h('button', { class: 'btn ' + (b.cls || 'gray'), type: 'button', onclick: async () => { if (b.keepOpen) return b.onClick?.(); const ok = await (b.onClick?.() ?? true); if (ok !== false) closeModal(); } }, b.label));
+  m.append(acts);
+  $('#modalbg').classList.remove('hidden');
+}
+function closeModal() { $('#modalbg').classList.add('hidden'); clear($('#modal')); }
+function confirmBox(title, text, okLabel, cls) {
+  return new Promise((res) => {
+    openModal(title, [h('p', null, text)], [
+      { label: 'ยกเลิก', cls: 'gray', onClick: () => { res(false); } },
+      { label: okLabel, cls: cls || 'red', onClick: () => { res(true); } }
+    ]);
+  });
+}
+function toast(msg) { openModal('แจ้งให้ทราบ', [h('p', null, msg)], [{ label: 'ตกลง', cls: 'blue' }]); }
+
+/* ====== ล็อกอิน / แอดมิน ====== */
+const loginErrMsg = (e) => ({
+  'auth/invalid-credential': 'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
+  'auth/invalid-email': 'รูปแบบอีเมลไม่ถูกต้อง',
+  'auth/user-not-found': 'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
+  'auth/wrong-password': 'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
+  'auth/too-many-requests': 'ลองหลายครั้งเกินไป กรุณารอสักครู่แล้วลองใหม่',
+  'auth/network-request-failed': 'ไม่มีอินเทอร์เน็ต ลองใหม่อีกครั้ง'
+}[e?.code] || 'เข้าสู่ระบบไม่สำเร็จ ลองใหม่อีกครั้ง');
+
+let unsubs = [];
+let uidNow = null;
+let lastActivity = Date.now();
+let timers = [];
+let isAdminSession = false;
+
+function showLogin(msg) {
+  $('#app').classList.add('hidden');
+  $('#login').classList.remove('hidden');
+  $('#loginErr').textContent = msg || '';
+  $('#pw').value = '';
+  $('#idlewarn').classList.add('hidden');
+}
+
+function teardown() {
+  isAdminSession = false;
+  unsubs.forEach((u) => { try { u(); } catch (_) { } }); unsubs = [];
+  timers.forEach(clearInterval); timers = [];
+  for (const k of Object.keys(D)) D[k] = (k === 'logs') ? {} : null;
+  for (const id of ['p-today', 'p-pending', 'p-staff', 'p-branches']) clear($('#' + id));
+  destroyMaps();
+  closeModal();
+  $('#who').textContent = '';
+}
+
+$('#loginForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  $('#loginErr').textContent = '';
+  $('#loginBtn').disabled = true;
+  try { await signInWithEmailAndPassword(auth, $('#em').value.trim(), $('#pw').value); }
+  catch (e) { $('#loginErr').textContent = loginErrMsg(e); }
+  finally { $('#loginBtn').disabled = false; }
+});
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { teardown(); showLogin(sessionStorage.getItem('idleMsg') || ''); sessionStorage.removeItem('idleMsg'); return; }
+  if (user.isAnonymous) { showLogin(); return; }   // ไม่ signOut ผู้ใช้ anonymous แค่แสดงฟอร์มล็อกอิน
+  try {
+    const snap = await get(A('admins/' + user.uid));
+    if (snap.val() !== true) throw new Error('not admin');
+  } catch (_) {
+    await signOut(auth);
+    showLogin('บัญชีนี้ไม่มีสิทธิ์เจ้าของร้าน');
+    return;
+  }
+  uidNow = user.uid;
+  $('#who').textContent = user.email || '';
+  $('#login').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  startApp();
+});
+
+$('#lockBtn').addEventListener('click', () => signOut(auth));
+
+/* ล็อกเอาต์เมื่อไม่ใช้งาน 30 นาที */
+let lastMove = 0;
+const bump = () => { lastActivity = Date.now(); $('#idlewarn').classList.add('hidden'); };
+for (const t of ['pointerdown', 'keydown', 'wheel']) addEventListener(t, bump, { passive: true });
+addEventListener('mousemove', () => { const n = Date.now(); if (n - lastMove > 1000) { lastMove = n; bump(); } }, { passive: true });
+setInterval(() => {
+  if (!auth.currentUser) return;
+  const idle = Date.now() - lastActivity;
+  if (idle >= IDLE_MS) { sessionStorage.setItem('idleMsg', 'ออกจากระบบอัตโนมัติเพราะไม่ได้ใช้งาน 30 นาที'); signOut(auth); }
+  else if (idle >= IDLE_MS - 60000) $('#idlewarn').classList.remove('hidden');
+}, 30000);
+
+/* ====== ข้อมูลสด ====== */
+const D = { branches: null, settings: null, staff: null, state: null, secret: null, requests: null, logs: {} };
+let logDates = [];
+
+function listen(path, key) {
+  unsubs.push(onValue(A(path), (s) => { D[key] = s.val() || {}; refresh(); }, (e) => console.warn('listen', path, e.code)));
+}
+function listenLogs() {
+  // ฟัง logs ของวันนี้กับเมื่อวาน (เผื่อกะข้ามคืน)
+  const want = [bangkokDate(serverNow()), bangkokDate(serverNow() - 86400000)];
+  if (want.join() === logDates.join()) return;
+  logDates = want;
+  logUnsubs.forEach((u) => u()); logUnsubs = [];
+  D.logs = {};
+  for (const d of want) logUnsubs.push(onValue(A('logs/' + d), (s) => { D.logs[d] = s.val() || {}; refresh(); }, (e) => console.warn('logs', e.code)));
+}
+let logUnsubs = [];
+
+function startApp() {
+  logDates = []; logUnsubs = [];
+  unsubs.push(onValue(ref(db, '.info/serverTimeOffset'), (s) => { serverOffset = s.val() || 0; }));
+  listen('branches', 'branches'); listen('settings', 'settings'); listen('staff', 'staff');
+  listen('state', 'state'); listen('staffSecret', 'secret'); listen('deviceRequests', 'requests');
+  listenLogs();
+  unsubs.push(() => { logUnsubs.forEach((u) => u()); logUnsubs = []; });
+  timers.push(setInterval(() => { listenLogs(); if (curTab === 'today') renderToday(); }, 1000));
+  bump();
+  showTab(curTab);
+}
+
+let curTab = 'today';
+function showTab(t) {
+  curTab = t;
+  document.querySelectorAll('#side .tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+  for (const id of ['today', 'pending', 'staff', 'branches']) $('#p-' + id).classList.toggle('hidden', id !== t);
+  refresh();
+  if (t === 'branches') setTimeout(() => mapCards.forEach((c) => c.map.invalidateSize()), 50);
+}
+document.querySelectorAll('#side .tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+let refreshQueued = false;
+function refresh() {
+  if (refreshQueued) return;
+  refreshQueued = true;
+  queueMicrotask(() => {
+    refreshQueued = false;
+    if (!auth.currentUser) return;
+    const pend = Object.values(D.requests || {}).filter((r) => r && r.status === 'pending').length;
+    const bd = $('#pendBadge'); bd.textContent = pend; bd.classList.toggle('hidden', pend === 0);
+    if (curTab === 'today') renderToday();
+    else if (curTab === 'pending') renderPending();
+    else if (curTab === 'staff') renderStaff();
+    else if (curTab === 'branches') renderBranches();
+  });
+}
+
+/* ====== 1. สถานะวันนี้ ====== */
+function summarize(logsObj) {
+  const ev = Object.values(logsObj || {}).filter((l) => l && typeof l.ts === 'number').sort((a, b) => a.ts - b.ts);
+  const r = { inTs: null, outTs: null, breakMs: 0, openBreak: null, flags: new Set() };
+  for (const e of ev) {
+    if (e.flag) r.flags.add(e.flag);
+    if (e.type === 'in') { r.inTs = e.ts; r.outTs = null; r.breakMs = 0; r.openBreak = null; }
+    else if (e.type === 'break_start') r.openBreak = e.ts;
+    else if (e.type === 'break_end' && r.openBreak != null) { r.breakMs += e.ts - r.openBreak; r.openBreak = null; }
+    else if (e.type === 'out') r.outTs = e.ts;
+  }
+  return r;
+}
+
+function personStatus(sid, s, today, now) {
+  const st = (D.state || {})[sid];
+  const grace = Number((D.settings || {}).lateGraceMin ?? 5);
+  const out = { cls: 's-none', text: 'ยังไม่มา', tags: [], branchId: s.branchId, late: false };
+  if (!st || !st.workDate) return out;
+  const live = st.status === 'working' || st.status === 'on_break';
+  const stale = live && typeof st.inAt === 'number' && now - st.inAt > STALE_MS;
+  const sum = summarize(((D.logs || {})[st.workDate] || {})[sid]);
+  const yesterday = bangkokDate(now - 86400000);
+  const prevShiftDone = !live && st.workDate === yesterday && sum.outTs != null && bangkokDate(sum.outTs) === today;
+  const future = st.workDate > today;
+  if (!live && st.workDate !== today && !prevShiftDone && !future) return out;
+  if (st.lastBranchId) out.branchId = st.lastBranchId;
+  const brk = sum.breakMs + (sum.openBreak != null ? now - sum.openBreak : 0);
+  const lim = Number(((D.branches || {})[out.branchId] || {}).breakLimitMin ?? 60) * 60000;
+  if (sum.inTs != null && s.shiftStart) {
+    const shiftMs = Date.parse(`${st.workDate}T${s.shiftStart}:00+07:00`);
+    const lateMin = Math.floor((sum.inTs - shiftMs) / 60000);
+    if (lateMin > grace) { out.late = true; out.tags.push({ t: `สาย ${lateMin} นาที`, c: 'late' }); }
+  }
+  // เตือนเมื่อวันทำงานไม่ตรงกับเวลาจริงของ log (rules แปลง now เป็นวันที่ไม่ได้ พนักงานที่แก้โค้ดอาจเลือกวันเองได้)
+  const stale0 = live && typeof st.inAt === 'number' && now - st.inAt > STALE_MS;
+  if (future || (sum.inTs != null && bangkokDate(sum.inTs) !== st.workDate) || (live && !stale0 && !logDates.includes(st.workDate))) out.tags.push({ t: 'วันทำงานไม่ตรงกับเวลาจริง ตรวจสอบ', c: 'bad' });
+  if (sum.flags.has('suspect')) out.tags.push({ t: 'น่าสงสัย', c: 'bad' });
+  else if (sum.flags.has('borderline')) out.tags.push({ t: 'ใกล้ขอบเขต', c: 'late' });
+  if (stale) { out.cls = 's-stale'; out.text = 'ลืมออกงาน (เข้าเมื่อ ' + fmtTime(st.inAt) + ')'; }
+  else if (st.status === 'working') { out.cls = 's-work'; out.text = 'ทำงาน ตั้งแต่ ' + fmtTime(sum.inTs ?? st.inAt); if (sum.breakMs) out.text += ' · พักไปแล้ว ' + fmtMin(sum.breakMs / 60000); }
+  else if (st.status === 'on_break') { out.cls = 's-break' + (brk > lim ? ' over' : ''); out.text = 'พักอยู่ ' + fmtClock(now - (sum.openBreak ?? now)) + ' (รวม ' + fmtMin(brk / 60000) + ')'; }
+  else if (st.status === 'done' && sum.inTs != null && sum.outTs != null) {
+    out.cls = 's-done'; out.text = `ออกแล้ว${prevShiftDone ? ' (กะเมื่อวาน)' : ''} ${fmtTime(sum.outTs)} · สุทธิ ${fmtMin((sum.outTs - sum.inTs - sum.breakMs) / 60000)}`;
+  } else if (st.status === 'done') { out.cls = 's-done'; out.text = 'ออกแล้ว'; }
+  return out;
+}
+
+function renderToday() {
+  const root = $('#p-today');
+  if (!D.staff || !D.branches || !D.state) return;
+  const now = serverNow(), today = bangkokDate(now);
+  const byBranch = {};
+  for (const [sid, s] of Object.entries(D.staff)) {
+    if (!s || s.active === false) continue;
+    const ps = personStatus(sid, s, today, now);
+    (byBranch[ps.branchId] ||= []).push({ sid, s, ps });
+  }
+  clear(root);
+  root.append(h('h3', null, 'สถานะวันนี้ · ' + today));
+  if (!Object.keys(D.staff).length) root.append(h('div', { class: 'card muted' }, 'ยังไม่มีพนักงาน ไปที่แท็บ "พนักงาน" เพื่อเพิ่ม'));
+  const order = [...Object.keys(D.branches), ...Object.keys(byBranch).filter((b) => !(b in D.branches))];
+  for (const bid of order) {
+    const list = byBranch[bid]; if (!list) continue;
+    list.sort((a, b) => a.s.nickname.localeCompare(b.s.nickname, 'th'));
+    const grid = h('div', { class: 'grid' });
+    for (const { s, ps } of list) {
+      grid.append(h('div', { class: 'person ' + ps.cls + (ps.late ? ' late' : '') },
+        h('div', { class: 'nm' }, s.nickname),
+        h('div', { class: 'tx' }, ps.text),
+        ps.tags.map((t) => h('span', { class: 'tag ' + t.c }, t.t))));
+    }
+    root.append(h('div', { class: 'card' }, h('h3', null, ((D.branches[bid] || {}).name) || bid), grid));
+  }
+}
+
+/* ====== 2. รอตรวจ (คำขอผูกเครื่อง) ====== */
+function renderPending() {
+  const root = $('#p-pending');
+  if (!D.requests || !D.staff || !D.secret) return;
+  clear(root);
+  root.append(h('h3', null, 'รอตรวจ'));
+  root.append(h('h4', null, 'คำขอผูกเครื่อง'));
+  const reqs = Object.entries(D.requests).filter(([, r]) => r && typeof r === 'object').sort((a, b) => (a[1].requestedAt || 0) - (b[1].requestedAt || 0));
+  if (!reqs.length) root.append(h('div', { class: 'card muted' }, 'ไม่มีคำขอที่รออยู่'));
+  for (const [uid, r] of reqs) {
+    const s = (D.staff || {})[r.staffId];
+    const secret = (D.secret || {})[r.staffId];
+    const pinOk = !!(secret && secret.pinHash && secret.pinHash === r.pinHash);
+    const replaces = s && s.uid && s.uid !== uid;
+    const other = Object.entries(D.staff).find(([sid, x]) => sid !== r.staffId && x && x.uid === uid);
+    const rejected = r.status === 'rejected';
+    const dup = !rejected && reqs.filter(([, x]) => x.staffId === r.staffId && x.status !== 'rejected').length > 1;
+    root.append(h('div', { class: 'card req' },
+      h('div', null,
+        h('div', null, h('b', null, s ? s.nickname : '(ไม่พบพนักงาน)'), ' ขอผูกเครื่อง'),
+        dup && h('div', { class: 'notice' }, 'มีคำขอหลายรายการสำหรับชื่อนี้ — ตรวจให้ดีก่อนอนุมัติ'),
+        h('div', { style: 'font-weight:700;margin-top:4px' }, 'ขอเมื่อ ', r.requestedAt ? fmtTime(r.requestedAt) + ' น. ' + bangkokDate(r.requestedAt) : '-'),
+        h('div', { style: 'font-weight:600;word-break:break-all;max-width:520px' }, 'เครื่อง: ', r.userAgent || '-'),
+        h('div', null,
+          h('span', { class: 'tag ' + (pinOk ? 'ok' : 'bad') }, pinOk ? 'PIN ถูกต้อง ✔' : 'PIN ไม่ตรง ✘'),
+          replaces && h('span', { class: 'tag late' }, 'จะแทนเครื่องเดิม'),
+          other && h('span', { class: 'tag late' }, 'เครื่องนี้ผูกกับ ' + other[1].nickname + ' อยู่ จะย้ายให้'),
+          rejected && h('span', { class: 'tag' }, 'ไม่อนุมัติแล้ว')),
+        ),
+      h('div', { class: 'row' },
+        s && !rejected && h('button', { class: 'btn' + (pinOk ? '' : ' gray'), onclick: () => approve(uid, r, s, pinOk, other) }, pinOk ? '✔ อนุมัติ' : 'อนุมัติทั้งที่ PIN ไม่ตรง'),
+        !rejected && h('button', { class: 'btn orange', onclick: () => rejectReq(uid) }, '✘ ไม่อนุมัติ'),
+        h('button', { class: 'btn gray', onclick: () => removeReq(uid) }, 'ลบ'))));
+  }
+  root.append(h('p', { class: 'muted' }, 'หมายเหตุ: log ที่ติดธง ใกล้ขอบเขต/น่าสงสัย ถูกบันทึกไว้แล้วและเห็นป้ายในแท็บสถานะวันนี้ หน้าตรวจละเอียดจะมาในเฟสถัดไป'));
+}
+async function approve(uid, r, s, pinOk, other) {
+  if (!pinOk && !(await confirmBox('PIN ไม่ตรง', `PIN ที่ ${s.nickname} ใส่ไม่ตรงกับที่ตั้งไว้ ยืนยันอนุมัติหรือไม่`, 'อนุมัติ', 'orange'))) return;
+  const sid = r.staffId;
+  const up = {
+    [`staff/${sid}/uid`]: uid, [`staff/${sid}/deviceApproved`]: true, [`staff/${sid}/deviceApprovedAt`]: serverTimestamp(),
+    [`deviceRequests/${uid}`]: null
+  };
+  if (other) { up[`staff/${other[0]}/uid`] = null; up[`staff/${other[0]}/deviceApproved`] = false; }
+  try { await update(A(''), up); } catch (e) { toast('อนุมัติไม่สำเร็จ: ' + (e.code || e.message)); }
+}
+async function rejectReq(uid) { try { await update(A('deviceRequests/' + uid), { status: 'rejected' }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
+async function removeReq(uid) { try { await remove(A('deviceRequests/' + uid)); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
+
+/* ====== 3. พนักงาน ====== */
+const PIN_RE = /^[0-9]{4}$/, SHIFT_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+function branchSelect(val) {
+  const sel = h('select');
+  for (const [bid, b] of Object.entries(D.branches || {})) sel.append(h('option', { value: bid }, b.name || bid));
+  if (val) sel.value = val;
+  return sel;
+}
+function renderStaff() {
+  const root = $('#p-staff');
+  if (!D.staff || !D.branches) return;
+  // ไม่วาดทับขณะกำลังพิมพ์ในฟอร์มเพิ่มพนักงาน
+  const keep = root.querySelector('#addForm');
+  const vals = keep ? { n: $('#addN').value, b: $('#addB').value, s: $('#addS').value, p1: $('#addP1').value, p2: $('#addP2').value } : null;
+  clear(root);
+  root.append(h('h3', null, 'พนักงาน'));
+  const hasBranch = Object.keys(D.branches).length > 0;
+  const addN = h('input', { type: 'text', id: 'addN', maxlength: 20, placeholder: 'ชื่อเล่น' });
+  const addB = branchSelect(); addB.id = 'addB';
+  const addS = h('input', { type: 'text', id: 'addS', value: '08:00', size: 6, maxlength: 5 });
+  const addP1 = h('input', { type: 'password', id: 'addP1', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
+  const addP2 = h('input', { type: 'password', id: 'addP2', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
+  if (vals) { addN.value = vals.n; if (vals.b) addB.value = vals.b; addS.value = vals.s; addP1.value = vals.p1; addP2.value = vals.p2; }
+  const msg = h('span', { class: 'err', id: 'addErr' });
+  root.append(h('div', { class: 'card', id: 'addForm' }, h('b', null, 'เพิ่มพนักงาน'),
+    !hasBranch && h('div', { class: 'notice' }, 'ต้องสร้างสาขาก่อน (แท็บ "ตั้งค่าสาขา")'),
+    h('div', { class: 'row' },
+      h('label', null, 'ชื่อเล่น', addN), h('label', null, 'สาขาหลัก', addB), h('label', null, 'เวลาเข้ากะ (HH:MM)', addS),
+      h('label', null, 'PIN 4 หลัก', addP1), h('label', null, 'PIN อีกครั้ง', addP2),
+      h('button', { class: 'btn', disabled: !hasBranch, onclick: () => addStaff(addN, addB, addS, addP1, addP2, msg) }, 'เพิ่ม')),
+    msg));
+  const tb = h('tbody');
+  const rows = Object.entries(D.staff).sort((a, b) => (a[1].nickname || '').localeCompare(b[1].nickname || '', 'th'));
+  for (const [sid, s] of rows) {
+    const dev = s.uid && s.deviceApproved ? 'ผูกเครื่องแล้ว' : 'ยังไม่ผูกเครื่อง';
+    tb.append(h('tr', null,
+      h('td', null, h('b', null, s.nickname)),
+      h('td', null, ((D.branches || {})[s.branchId] || {}).name || s.branchId),
+      h('td', null, s.shiftStart),
+      h('td', null, h('span', { class: 'tag ' + (s.active === false ? 'bad' : 'ok') }, s.active === false ? 'ปิดใช้งาน' : 'ใช้งาน')),
+      h('td', null, h('span', { class: 'tag ' + (s.uid && s.deviceApproved ? 'ok' : '') }, dev)),
+      h('td', null, h('div', { class: 'row', style: 'margin:0' },
+        h('button', { class: 'btn small blue', onclick: () => editStaff(sid, s) }, 'แก้ไข'),
+        h('button', { class: 'btn small orange', onclick: () => resetPin(sid, s) }, 'รีเซ็ต PIN'),
+        s.uid && h('button', { class: 'btn small gray', onclick: () => unbind(sid, s) }, 'ยกเลิกผูกเครื่อง'),
+        h('button', { class: 'btn small ' + (s.active === false ? '' : 'red'), onclick: () => toggleActive(sid, s) }, s.active === false ? 'เปิดบัญชี' : 'ปิดบัญชี')))));
+  }
+  root.append(h('table', null, h('thead', null, h('tr', null, ['ชื่อเล่น', 'สาขาหลัก', 'เวลาเข้ากะ', 'บัญชี', 'เครื่อง', ''].map((t) => h('th', null, t)))), tb));
+}
+async function addStaff(n, b, s, p1, p2, msg) {
+  msg.textContent = '';
+  const nick = n.value.trim();
+  if (!nick || nick.length > 20) return (msg.textContent = 'กรอกชื่อเล่น (ไม่เกิน 20 ตัวอักษร)');
+  if (!b.value) return (msg.textContent = 'เลือกสาขา');
+  if (!SHIFT_RE.test(s.value)) return (msg.textContent = 'เวลาเข้ากะต้องเป็นรูปแบบ HH:MM เช่น 08:00');
+  if (!PIN_RE.test(p1.value)) return (msg.textContent = 'PIN ต้องเป็นตัวเลข 4 หลัก');
+  if (p1.value !== p2.value) return (msg.textContent = 'PIN สองครั้งไม่ตรงกัน');
+  const sid = push(A('staff')).key;
+  try {
+    await update(A(''), {
+      [`staff/${sid}`]: { nickname: nick, branchId: b.value, shiftStart: s.value, active: true, createdAt: serverTimestamp() },
+      [`staffSecret/${sid}`]: { pinHash: await sha256Hex(sid + p1.value) }
+    });
+    n.value = p1.value = p2.value = '';
+  } catch (e) { msg.textContent = 'บันทึกไม่สำเร็จ: ' + (e.code || e.message); }
+}
+function editStaff(sid, s) {
+  const n = h('input', { type: 'text', maxlength: 20, '.value': s.nickname });
+  const b = branchSelect(s.branchId);
+  const sh = h('input', { type: 'text', maxlength: 5, size: 6, '.value': s.shiftStart });
+  const err = h('div', { class: 'err' });
+  openModal('แก้ไข ' + s.nickname, [h('div', { class: 'row' }, h('label', null, 'ชื่อเล่น', n), h('label', null, 'สาขาหลัก', b), h('label', null, 'เวลาเข้ากะ', sh)), err], [
+    { label: 'ยกเลิก' },
+    { label: 'บันทึก', cls: 'blue', onClick: async () => {
+      const nick = n.value.trim();
+      if (!nick || nick.length > 20) { err.textContent = 'ชื่อเล่นไม่ถูกต้อง'; return false; }
+      if (!SHIFT_RE.test(sh.value)) { err.textContent = 'เวลาเข้ากะต้องเป็น HH:MM'; return false; }
+      try { await update(A('staff/' + sid), { nickname: nick, branchId: b.value, shiftStart: sh.value }); } catch (e) { err.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); return false; }
+    } }
+  ]);
+}
+function resetPin(sid, s) {
+  const p1 = h('input', { type: 'password', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
+  const p2 = h('input', { type: 'password', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
+  const err = h('div', { class: 'err' });
+  openModal('รีเซ็ต PIN ของ ' + s.nickname, [h('div', { class: 'row' }, h('label', null, 'PIN ใหม่ 4 หลัก', p1), h('label', null, 'อีกครั้ง', p2)), err], [
+    { label: 'ยกเลิก' },
+    { label: 'ยืนยันเปลี่ยน PIN', cls: 'orange', onClick: async () => {
+      if (!PIN_RE.test(p1.value)) { err.textContent = 'PIN ต้องเป็นตัวเลข 4 หลัก'; return false; }
+      if (p1.value !== p2.value) { err.textContent = 'PIN สองครั้งไม่ตรงกัน'; return false; }
+      try { await set(A('staffSecret/' + sid), { pinHash: await sha256Hex(sid + p1.value) }); } catch (e) { err.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); return false; }
+    } }
+  ]);
+}
+async function unbind(sid, s) {
+  if (!(await confirmBox('ยกเลิกผูกเครื่อง', `เครื่องของ ${s.nickname} จะใช้ลงเวลาไม่ได้ทันที และต้องลงทะเบียนใหม่ ยืนยันหรือไม่`, 'ยกเลิกผูกเครื่อง'))) return;
+  try { await update(A('staff/' + sid), { uid: null, deviceApproved: false }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
+}
+async function toggleActive(sid, s) {
+  const to = s.active === false;
+  if (!to && !(await confirmBox('ปิดบัญชี', `ปิดบัญชีของ ${s.nickname} หรือไม่ (ข้อมูลเดิมไม่หาย)`, 'ปิดบัญชี'))) return;
+  try { await update(A('staff/' + sid), { active: to }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
+}
+
+/* ====== 4. ตั้งค่าสาขา ====== */
+const mapCards = new Map();   // bid -> {map, update(b), el}
+function destroyMaps() { mapCards.forEach((c) => c.map.remove()); mapCards.clear(); }
+const THAI_CENTER = [13.0, 101.0];
+
+function parseLatLng(text) {
+  const m = String(text).match(/(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)/);
+  return m ? [parseFloat(m[1]), parseFloat(m[2])] : null;
+}
+
+function buildBranchCard(bid, b) {
+  const has = typeof b.lat === 'number' && typeof b.lng === 'number';
+  const f = {
+    name: h('input', { type: 'text', maxlength: 40, size: 24 }),
+    lat: h('input', { type: 'text', size: 12, placeholder: '13.xxxxx หรือวาง "13.x, 100.x"' }),
+    lng: h('input', { type: 'text', size: 12 }),
+    radius: h('input', { type: 'range', min: 30, max: 300, step: 5 }),
+    radiusN: h('input', { type: 'number', min: 30, max: 300, step: 5, style: 'width:80px' }),
+    maxAcc: h('input', { type: 'number', min: 5, max: 500, style: 'width:80px' }),
+    grace: h('input', { type: 'number', min: 1, max: 3, step: 0.1, style: 'width:80px' }),
+    brk: h('input', { type: 'number', min: 0, max: 600, style: 'width:80px' }),
+    active: h('input', { type: 'checkbox' })
+  };
+  const mapDiv = h('div', { class: 'map' });
+  const accMsg = h('div', { class: 'muted' });
+  const err = h('div', { class: 'err' });
+  const saveBtn = h('button', { class: 'btn', disabled: true }, 'บันทึก');
+  const geoBtn = h('button', { class: 'btn blue small', type: 'button' }, 'ใช้ตำแหน่งเครื่องนี้');
+  const el = h('div', { class: 'card' },
+    h('h3', null, b.name || bid, ' ', h('span', { class: 'muted' }, '(' + bid + ')')),
+    h('div', { class: 'row' }, h('label', null, 'ชื่อสาขา', f.name), h('label', null, 'ละติจูด', f.lat), h('label', null, 'ลองจิจูด', f.lng), geoBtn),
+    accMsg, mapDiv,
+    h('div', { class: 'row' },
+      h('label', null, 'รัศมี (เมตร) 30-300', f.radius), h('label', null, ' ', f.radiusN),
+      h('label', null, 'แม่นยำสูงสุดที่ยอมรับ (ม.)', f.maxAcc), h('label', null, 'ตัวคูณชายขอบ', f.grace),
+      h('label', null, 'พักได้ไม่เกิน (นาที)', f.brk),
+      h('label', null, 'เปิดใช้งาน', f.active)),
+    err, h('div', { class: 'row' }, saveBtn));
+
+  const map = L.map(mapDiv).setView(has ? [b.lat, b.lng] : THAI_CENTER, has ? 17 : 6);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+  let marker = null, circle = null, dirty = false;
+  const setDirty = (v) => { dirty = v; saveBtn.disabled = !v; };
+  function draw(lat, lng) {
+    const r = Number(f.radius.value) || 80;
+    if (!marker) {
+      marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+      circle = L.circle([lat, lng], { radius: r, color: '#16a34a', fillOpacity: .15 }).addTo(map);
+      marker.on('drag', (e) => { const p = e.target.getLatLng(); circle.setLatLng(p); });
+      marker.on('dragend', (e) => { const p = e.target.getLatLng(); f.lat.value = p.lat.toFixed(6); f.lng.value = p.lng.toFixed(6); setDirty(true); });
+    } else { marker.setLatLng([lat, lng]); circle.setLatLng([lat, lng]); }
+    circle.setRadius(r);
+  }
+  function fill(bb) {
+    f.name.value = bb.name || ''; f.radius.value = f.radiusN.value = bb.radius ?? 80;
+    f.maxAcc.value = bb.maxAccuracy ?? 60; f.grace.value = bb.graceFactor ?? 1.5; f.brk.value = bb.breakLimitMin ?? 60;
+    f.active.checked = bb.active !== false;
+    if (typeof bb.lat === 'number' && typeof bb.lng === 'number') { f.lat.value = bb.lat; f.lng.value = bb.lng; draw(bb.lat, bb.lng); map.setView([bb.lat, bb.lng], map.getZoom() < 15 ? 17 : map.getZoom(), { animate: false }); }
+    else { f.lat.value = f.lng.value = ''; }
+    setDirty(false);
+  }
+  fill(b);
+  map.on('click', (e) => { f.lat.value = e.latlng.lat.toFixed(6); f.lng.value = e.latlng.lng.toFixed(6); draw(e.latlng.lat, e.latlng.lng); setDirty(true); });
+  f.radius.addEventListener('input', () => { f.radiusN.value = f.radius.value; circle?.setRadius(Number(f.radius.value)); setDirty(true); });
+  f.radiusN.addEventListener('input', () => { f.radius.value = f.radiusN.value; circle?.setRadius(Number(f.radiusN.value) || 80); setDirty(true); });
+  const fromInputs = () => { const la = parseFloat(f.lat.value), ln = parseFloat(f.lng.value); if (isFinite(la) && isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180) { draw(la, ln); map.setView([la, ln]); } setDirty(true); };
+  f.lat.addEventListener('input', () => { const p = f.lat.value.includes(',') ? parseLatLng(f.lat.value) : null; if (p) { f.lat.value = p[0]; f.lng.value = p[1]; } fromInputs(); });
+  f.lng.addEventListener('input', fromInputs);
+  for (const k of ['name', 'maxAcc', 'grace', 'brk', 'active']) f[k].addEventListener('input', () => setDirty(true));
+  f.active.addEventListener('change', () => setDirty(true));
+
+  geoBtn.addEventListener('click', async () => {
+    if (!navigator.geolocation) { accMsg.textContent = 'เครื่องนี้ไม่รองรับตำแหน่ง'; return; }
+    geoBtn.disabled = true; accMsg.textContent = 'กำลังอ่านตำแหน่ง...';
+    let best = null;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const p = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }));
+        if (!best || p.coords.accuracy < best.coords.accuracy) best = p;
+      } catch (e) { if (e.code === 1) { accMsg.textContent = 'ยังไม่ได้อนุญาตให้ใช้ตำแหน่ง'; geoBtn.disabled = false; return; } }
+    }
+    geoBtn.disabled = false;
+    if (!best) { accMsg.textContent = 'หาตำแหน่งไม่ได้ ลองใหม่อีกครั้ง'; return; }
+    f.lat.value = best.coords.latitude.toFixed(6); f.lng.value = best.coords.longitude.toFixed(6);
+    draw(best.coords.latitude, best.coords.longitude); map.setView([best.coords.latitude, best.coords.longitude], 18); setDirty(true);
+    accMsg.textContent = `แม่นยำ ±${Math.round(best.coords.accuracy)} ม. (คอม PC มักไม่แม่น แนะนำเปิดหน้านี้จากมือถือตอนยืนในร้าน)`;
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const nm = f.name.value.trim();
+    const v = { name: nm, radius: Number(f.radiusN.value), maxAccuracy: Number(f.maxAcc.value), graceFactor: Number(f.grace.value), breakLimitMin: Number(f.brk.value), active: f.active.checked, updatedAt: serverTimestamp() };
+    if (!nm) return (err.textContent = 'กรอกชื่อสาขา');
+    if (!(v.radius >= 30 && v.radius <= 300)) return (err.textContent = 'รัศมีต้องอยู่ระหว่าง 30-300 เมตร');
+    if (!(v.maxAccuracy >= 5 && v.maxAccuracy <= 500)) return (err.textContent = 'ค่าแม่นยำต้องอยู่ระหว่าง 5-500');
+    if (!(v.graceFactor >= 1 && v.graceFactor <= 3)) return (err.textContent = 'ตัวคูณชายขอบต้องอยู่ระหว่าง 1-3');
+    if (!(v.breakLimitMin >= 0 && v.breakLimitMin <= 600)) return (err.textContent = 'เวลาพักต้องอยู่ระหว่าง 0-600 นาที');
+    if (f.lat.value !== '' || f.lng.value !== '') {
+      const la = parseFloat(f.lat.value), ln = parseFloat(f.lng.value);
+      if (!(isFinite(la) && isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180)) return (err.textContent = 'พิกัดไม่ถูกต้อง');
+      v.lat = la; v.lng = ln;
+    }
+    try { await update(A('branches/' + bid), v); setDirty(false); } catch (e) { err.textContent = 'บันทึกไม่สำเร็จ: ' + (e.code || e.message); }
+  });
+  return { map, el, update: (bb) => { if (!dirty) fill(bb); } };
+}
+
+function renderBranches() {
+  const root = $('#p-branches');
+  if (!D.branches || !D.settings) return;
+  const ids = Object.keys(D.branches).sort();
+  const existing = [...mapCards.keys()].sort();
+  if (!root.firstChild || ids.join() !== existing.join()) {
+    destroyMaps(); clear(root);
+    root.append(h('h3', null, 'ตั้งค่าสาขา'));
+    if (!ids.length) {
+      root.append(h('div', { class: 'card' }, h('p', null, 'ยังไม่มีสาขา'),
+        h('button', { class: 'btn', onclick: seedBranches }, 'สร้าง 2 สาขาเริ่มต้น'),
+        h('p', { class: 'muted' }, 'จะสร้างสาขาวงเวียนและสาขาแยกคลองยาง ยังไม่มีพิกัด ให้ไปยืนที่ร้านแล้วตั้งพิกัดทีหลัง')));
+    }
+    const holder = h('div'); root.append(holder);
+    for (const bid of ids) { const c = buildBranchCard(bid, D.branches[bid]); mapCards.set(bid, c); holder.append(c.el); }
+    const lg = h('input', { type: 'number', min: 0, max: 120, id: 'lateGrace', style: 'width:80px' });
+    const lgMsg = h('span', { class: 'err' });
+    root.append(h('div', { class: 'card', id: 'general' }, h('h3', null, 'ค่าทั่วไป'),
+      h('div', { class: 'row' }, h('label', null, 'นับว่ามาสายเมื่อเกินเวลากะ (นาที)', lg),
+        h('button', { class: 'btn', onclick: async () => {
+          const v = Number(lg.value);
+          if (!(v >= 0 && v <= 120)) { lgMsg.textContent = 'ต้องอยู่ระหว่าง 0-120'; return; }
+          try { await set(A('settings/lateGraceMin'), v); lgMsg.textContent = ''; toast('บันทึกแล้ว'); } catch (e) { lgMsg.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); }
+        } }, 'บันทึก')), lgMsg));
+    lg.value = D.settings.lateGraceMin ?? 5;
+    setTimeout(() => mapCards.forEach((c) => c.map.invalidateSize()), 50);
+  } else {
+    for (const bid of ids) mapCards.get(bid).update(D.branches[bid]);
+    const lg = $('#lateGrace'); if (lg && document.activeElement !== lg) lg.value = D.settings.lateGraceMin ?? 5;
+  }
+}
+async function seedBranches() {
+  const base = { radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60, active: true, updatedAt: serverTimestamp() };
+  try {
+    await update(A(''), {
+      'branches/wongwian': { name: 'สาขาวงเวียน', ...base },
+      'branches/klongyang': { name: 'สาขาแยกคลองยาง', ...base },
+      'settings/lateGraceMin': 5
+    });
+  } catch (e) { toast('สร้างไม่สำเร็จ: ' + (e.code || e.message)); }
+}
+</script>
+</body>
+</html>

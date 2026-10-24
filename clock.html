@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16a34a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ลงเวลา">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>ลงเวลา อึ้งลักเส็ง</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;font-size:19px;color:#111827;background:#fff;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  -webkit-user-select:none;user-select:none}
+button{font:inherit;border:0;cursor:pointer;touch-action:manipulation}
+#root{min-height:100%;display:flex;flex-direction:column;padding:14px}
+.hdr{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:21px;font-weight:700;margin-bottom:6px}
+.hdr .br{font-size:18px;font-weight:600;color:#374151;text-align:right}
+.bar{padding:9px 12px;border-radius:10px;font-weight:600;font-size:18px;margin-bottom:10px;background:#e5e7eb;color:#374151}
+.bar.g{background:#dcfce7;color:#166534}.bar.o{background:#ffedd5;color:#9a3412}.bar.r{background:#fee2e2;color:#991b1b}
+.bar.y{background:#fef08a;color:#713f12}
+.big{flex:1;min-height:46vh;width:100%;border-radius:22px;color:#fff;font-size:42px;font-weight:800;margin:6px 0 10px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;line-height:1.2;padding:12px;text-align:center}
+.big:disabled{background:#d1d5db!important;color:#6b7280}
+.big small{font-size:22px;font-weight:600}
+.c-in{background:#16a34a}.c-bs{background:#f97316}.c-be{background:#2563eb}.c-out{background:#dc2626}.c-gray{background:#9ca3af}
+.sec{width:100%;padding:14px;border-radius:14px;font-size:24px;font-weight:700;color:#fff;background:#dc2626;margin-bottom:10px}
+.timer{font-size:56px;font-variant-numeric:tabular-nums;font-weight:800}
+.timer.over{color:#ffedd5}
+.tl{font-size:19px;color:#374151;margin:4px 2px;min-height:1.4em}
+.card{background:#f3f4f6;border-radius:14px;padding:16px;margin:8px 0;font-size:20px;line-height:1.5}
+.card h2{margin:0 0 8px;font-size:24px}
+.btn{background:#16a34a;color:#fff;border-radius:14px;padding:16px 20px;font-size:24px;font-weight:700;width:100%;margin-top:10px;min-height:64px}
+.btn.gray{background:#6b7280}.btn.blue{background:#2563eb}.btn.red{background:#dc2626}
+.btn.link{background:transparent;color:#2563eb;font-size:18px;font-weight:600;min-height:44px}
+.names{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+.names button{background:#16a34a;color:#fff;border-radius:16px;font-size:28px;font-weight:700;min-height:92px;padding:8px;word-break:break-word}
+.dots{display:flex;gap:16px;justify-content:center;margin:14px 0}
+.dots i{width:22px;height:22px;border-radius:50%;border:3px solid #6b7280;display:block}
+.dots i.on{background:#111827;border-color:#111827}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:360px;margin:0 auto;width:100%}
+.pad button{min-height:76px;font-size:34px;font-weight:700;border-radius:16px;background:#e5e7eb;color:#111827}
+.pad button.x{background:transparent}
+.err{color:#b91c1c;font-weight:600;min-height:1.4em;text-align:center}
+.small{font-size:17px;color:#4b5563}
+#ov{position:fixed;inset:0;background:rgba(255,255,255,.97);z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
+#ov .tick{width:180px;height:180px;border-radius:50%;background:#16a34a;display:flex;align-items:center;justify-content:center;animation:pop .35s ease-out}
+#ov .tick svg{width:110px;height:110px}
+#ov .msg{font-size:34px;font-weight:800}
+@keyframes pop{from{transform:scale(.4)}to{transform:scale(1)}}
+#cf{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;display:flex;align-items:flex-end;justify-content:center}
+#cf .box{background:#fff;border-radius:22px 22px 0 0;padding:22px;width:100%;max-width:520px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<noscript>ต้องเปิดใช้งาน JavaScript</noscript>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
+import { getAuth, setPersistence, indexedDBLocalPersistence, signInAnonymously, onAuthStateChanged, connectAuthEmulator }
+  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
+import { getDatabase, ref, onValue, get, set, remove, update, push, serverTimestamp, connectDatabaseEmulator }
+  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js';
+
+/* ====== ตั้งค่า Firebase (เจ้าของใส่เอง ดู README ข้อ 7) ====== */
+const FIREBASE_CONFIG = {
+  apiKey: 'PASTE_HERE',
+  authDomain: 'PASTE_HERE',
+  databaseURL: 'PASTE_HERE',
+  projectId: 'PASTE_HERE',
+  appId: 'PASTE_HERE'
+};
+
+const EMU = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).get('emu') === '1';
+const CONFIG_MISSING = !EMU && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
+
+const $root = document.getElementById('root');
+const $ = (s, r = document) => r.querySelector(s);
+/** สร้าง element ด้วย textContent เท่านั้น (ห้ามใช้ innerHTML กับข้อมูลจาก DB) */
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k.startsWith('.')) e[k.slice(1)] = v;
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const c of kids.flat(Infinity)) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(String(c))); }
+  return e;
+}
+const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+function card(title, ...body) { return h('div', { class: 'card' }, title && h('h2', null, title), ...body); }
+
+/* ====== หน้าที่ไม่ต้องใช้ Firebase ====== */
+if (CONFIG_MISSING) {
+  $root.append(card('ยังไม่ได้ตั้งค่า Firebase', h('div', null, 'ดูวิธีตั้งค่าในไฟล์ README')));
+  throw new Error('FIREBASE_CONFIG ยังไม่ได้ตั้งค่า');
+}
+if (!window.isSecureContext || !('geolocation' in navigator)) {
+  $root.append(card('เปิดแอปไม่ได้', h('div', null, 'เปิดจากลิงก์ที่ร้านส่งให้ (https) ด้วย Chrome หรือ Safari')));
+  throw new Error('unsupported');
+}
+
+/* ====== Firebase ====== */
+const app = initializeApp(EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG);
+const auth = getAuth(app);
+const db = getDatabase(app);
+if (EMU) { connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true }); connectDatabaseEmulator(db, '127.0.0.1', 9000); }
+const A = (p) => ref(db, 'attendance/' + p);
+try { await setPersistence(auth, indexedDBLocalPersistence); } catch (_) { /* ใช้ค่าเริ่มต้น */ }
+try { navigator.storage?.persist?.(); } catch (_) { }
+
+if ('serviceWorker' in navigator && !EMU) navigator.serviceWorker.register('./sw.js').catch(() => { });
+
+/* ====== เวลา ====== */
+let serverOffset = 0;
+const serverNow = () => Date.now() + serverOffset;
+const timeF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
+const dateF = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' });
+const fmtTime = (ms) => timeF.format(ms);
+const bangkokDate = (ms) => dateF.format(ms);
+const STALE_MS = 16 * 3600 * 1000;
+const COOLDOWN_MS = 30000;
+function fmtClock(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
+function fmtMin(m) { m = Math.max(0, Math.round(m)); const hh = Math.floor(m / 60), mm = m % 60; return hh ? `${hh} ชม. ${String(mm).padStart(2, '0')} น.` : `${mm} นาที`; }
+const fmtDist = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)} กม.` : `${Math.round(m)} ม.`);
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+/* ====== ข้อมูลสด ====== */
+const D = { staff: null, branches: null, settings: null, state: undefined, logs: null, req: undefined };
+let user = null;
+let connected = true;
+let me = null;            // { sid, s }
+let unsubs = [];
+let stateUnsub = null, logsUnsub = null, logsKey = '';
+const getLast = () => { try { return JSON.parse(localStorage.getItem('clock.last') || 'null'); } catch (_) { return null; } };
+
+let reg = { step: null, sid: null, pin: '', err: '' };   // ขั้นตอนลงทะเบียน
+let busy = null;           // null | 'locating' | 'saving' | 'slow'
+let refusal = null;        // { title, text, retry }
+let cooldownShown = false;
+let liveFix = null;        // fix ล่าสุดจาก watchPosition
+const fixLog = [];         // fix ทั้งหมดจาก watch (ใช้รวมตอนกดปุ่ม)
+let permState = 'unknown';
+let watchId = null;
+
+function attachUser() {
+  unsubs.push(onValue(ref(db, '.info/connected'), (s) => { connected = s.val() === true; render(); }));
+  unsubs.push(onValue(ref(db, '.info/serverTimeOffset'), (s) => { serverOffset = s.val() || 0; }));
+  unsubs.push(onValue(A('staff'), (s) => { D.staff = s.val() || {}; onStaff(); }, onListenErr));
+  unsubs.push(onValue(A('branches'), (s) => { D.branches = s.val() || {}; render(); }, onListenErr));
+  unsubs.push(onValue(A('settings'), (s) => { D.settings = s.val() || {}; }, onListenErr));
+  unsubs.push(onValue(A('deviceRequests/' + user.uid), (s) => { D.req = s.val(); render(); }, () => { D.req = null; render(); }));
+}
+function onListenErr(e) { console.warn('listen error', e?.code); }
+
+function onStaff() {
+  const found = Object.entries(D.staff || {}).find(([, s]) => s && s.uid === user.uid && s.deviceApproved === true);
+  const prev = me?.sid;
+  me = found ? { sid: found[0], s: found[1] } : null;
+  if (me && me.sid !== prev) {
+    reg = { step: null, sid: null, pin: '', err: '' };
+    if (stateUnsub) stateUnsub();
+    stateUnsub = onValue(A('state/' + me.sid), (s) => { D.state = s.val(); syncLogs(); render(); }, onListenErr);
+  }
+  if (!me && prev) { if (stateUnsub) stateUnsub(); stateUnsub = null; D.state = undefined; if (logsUnsub) logsUnsub(); logsUnsub = null; logsKey = ''; D.logs = null; }
+  if (me) { try { localStorage.setItem('clock.last', JSON.stringify({ sid: me.sid, nickname: me.s.nickname })); } catch (_) { } }
+  render();
+}
+function timelineDate() {
+  const st = D.state;
+  const today = bangkokDate(serverNow());
+  if (st && st.workDate && (st.status === 'working' || st.status === 'on_break' || (st.status === 'done' && st.workDate === today))) return st.workDate;
+  return today;
+}
+function syncLogs() {
+  if (!me) return;
+  const key = me.sid + '|' + timelineDate();
+  if (key === logsKey) return;
+  logsKey = key;
+  if (logsUnsub) logsUnsub();
+  D.logs = null;
+  logsUnsub = onValue(A(`logs/${timelineDate()}/${me.sid}`), (s) => { D.logs = s.val() || {}; render(); }, onListenErr);
+}
+
+/* ====== สถานะหน้าหลัก ====== */
+function mainMode() {
+  const st = D.state, now = serverNow(), today = bangkokDate(now);
+  if (!st || !st.status || st.status === 'off') return 'OFF';
+  const live = st.status === 'working' || st.status === 'on_break';
+  if (live && typeof st.inAt === 'number' && now - st.inAt > STALE_MS) return 'STALE';
+  if (st.status === 'working') return 'WORKING';
+  if (st.status === 'on_break') return 'ON_BREAK';
+  if (st.status === 'done') return st.workDate === today ? 'DONE' : 'OFF';
+  return 'OFF';
+}
+function summarize(logsObj) {
+  const ev = Object.values(logsObj || {}).filter((l) => l && typeof l.ts === 'number').sort((a, b) => a.ts - b.ts);
+  const r = { ev, inTs: null, outTs: null, breakMs: 0, openBreak: null };
+  for (const e of ev) {
+    if (e.type === 'in') { r.inTs = e.ts; r.outTs = null; r.breakMs = 0; r.openBreak = null; }
+    else if (e.type === 'break_start') r.openBreak = e.ts;
+    else if (e.type === 'break_end' && r.openBreak != null) { r.breakMs += e.ts - r.openBreak; r.openBreak = null; }
+    else if (e.type === 'out') r.outTs = e.ts;
+  }
+  return r;
+}
+const NEXT = { in: 'working', break_start: 'on_break', break_end: 'working', out: 'done' };
+const LABEL = { in: 'เข้างาน', break_start: 'เริ่มพัก', break_end: 'กลับจากพัก', out: 'ออกงาน' };
+const TL = { in: 'เข้า', break_start: 'พัก', break_end: 'กลับ', out: 'ออก' };
+const BTN_CLS = { in: 'c-in', break_start: 'c-bs', break_end: 'c-be', out: 'c-out' };
+
+/* ====== Geofence ====== */
+function haversine(la1, ln1, la2, ln2) {
+  const R = 6371008.8, r = Math.PI / 180;
+  const dLa = (la2 - la1) * r, dLn = (ln2 - ln1) * r;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLn / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+/** เลือกสาขาที่ใกล้สุดแล้วตัดสิน ok / borderline / refuse */
+function evaluate(lat, lng, acc) {
+  let best = null;
+  for (const [bid, b] of Object.entries(D.branches || {})) {
+    if (!b || b.active === false || typeof b.lat !== 'number' || typeof b.lng !== 'number') continue;
+    const d = haversine(lat, lng, b.lat, b.lng);
+    if (!best || d < best.d) best = { bid, b, d };
+  }
+  if (!best) return { verdict: 'nobranch' };
+  const R = Number(best.b.radius) || 80, M = Number(best.b.maxAccuracy) || 60, g = Number(best.b.graceFactor) || 1.5;
+  const d = best.d, a = acc;
+  let verdict, bReason = null;
+  if (d <= R && a <= M) verdict = 'ok';
+  else if ((d > R && d <= R * g && a <= M) || (d <= R && a > M && a <= 2 * M)) { verdict = 'borderline'; bReason = d > R ? 'dist' : 'acc'; }
+  else verdict = 'refuse';
+  return { verdict, bReason, bid: best.bid, branch: best.b, d, a, R, M, tooWeak: a > 2 * M, noPrecise: a > 1000 };
+}
+function refuseText(ev) {
+  if (ev.noPrecise) return 'มือถือปิด "ตำแหน่งที่แม่นยำ" อยู่ — เปิดในการตั้งค่าตำแหน่งของเว็บนี้';
+  if (ev.tooWeak) return 'สัญญาณตำแหน่งยังไม่ชัด — ออกไปใกล้ประตูหรือที่โล่ง แล้วกดใหม่';
+  return `อยู่ห่างร้าน ${fmtDist(ev.d)} — เดินเข้าใกล้ร้านอีกนิด`;
+}
+function geoErr(e) {
+  if (e && e.code === 1) return { title: 'ยังไม่ได้อนุญาตให้ใช้ตำแหน่ง', text: isIOS
+    ? 'iPhone: การตั้งค่า > ความเป็นส่วนตัวฯ > บริการหาตำแหน่งที่ตั้ง > Safari/เว็บไซต์ > ขณะใช้งานแอป'
+    : 'Android: แตะรูปแม่กุญแจข้างลิงก์ > สิทธิ์ > ตำแหน่ง > อนุญาต' };
+  if (e && e.code === 2) return { title: 'หาตำแหน่งไม่ได้', text: 'เปิด "ตำแหน่ง" ของมือถือ แล้วกดใหม่' };
+  return { title: 'หาตำแหน่งนานเกินไป', text: 'ออกไปใกล้ประตูหรือที่โล่ง แล้วกดใหม่' };
+}
+const gp = (opts) => new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, opts));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** เก็บตัวอย่างตำแหน่งสูงสุด 12 วิ เลือกค่าที่ accuracy ดีสุด */
+async function sampleFix() {
+  const t0 = Date.now(), samples = []; let lastErr = null;
+  for (;;) {
+    const el = Date.now() - t0;
+    if (samples.length >= 3 || el >= 12000 || (el >= 6000 && samples.length >= 1)) break;
+    try {
+      const p = await gp({ enableHighAccuracy: true, timeout: Math.min(10000, 12000 - el), maximumAge: 0 });
+      samples.push({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy });
+    } catch (e) { lastErr = e; if (e.code === 1) break; await sleep(500); }
+  }
+  for (const f of fixLog) if (f.t >= t0) samples.push(f);
+  if (!samples.length) throw lastErr || { code: 3 };
+  return samples.reduce((a, b) => (b.acc < a.acc ? b : a));
+}
+
+/* ----- แถบระยะสด ----- */
+function startWatch() {
+  if (watchId != null || !navigator.geolocation) return;
+  watchId = navigator.geolocation.watchPosition((p) => {
+    liveFix = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
+    fixLog.push(liveFix); if (fixLog.length > 20) fixLog.shift();
+    updateDynamic();
+  }, () => { }, { enableHighAccuracy: true, maximumAge: 5000 });
+}
+function stopWatch() { if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; } }
+async function initPermission() {
+  try {
+    if (!navigator.permissions?.query) { permState = 'prompt'; return; }
+    const st = await navigator.permissions.query({ name: 'geolocation' });
+    const apply = () => { permState = st.state; if (permState === 'granted') startWatch(); else stopWatch(); render(); };
+    st.onchange = apply; apply();
+  } catch (_) { permState = 'prompt'; render(); }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopWatch(); else if (permState === 'granted') startWatch();
+});
+async function askLocation() {
+  try { await gp({ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }); permState = 'granted'; startWatch(); }
+  catch (e) { if (e.code === 1) permState = 'denied'; }
+  render();
+}
+
+/* ====== ลงเวลา (กดปุ่ม) ====== */
+async function act(type) {
+  if (busy || !me) return;
+  refusal = null; cooldownShown = false;
+  if (!connected) { render(); return; }
+  const st = D.state;
+  if (st && typeof st.since === 'number' && serverNow() - st.since < COOLDOWN_MS) { cooldownShown = true; render(); return; }
+  if (type === 'out' && !(await confirmOut())) return;
+  busy = 'locating'; render();
+  let fix;
+  try { fix = await sampleFix(); }
+  catch (e) { busy = null; const g = geoErr(e); refusal = { ...g }; render(); return; }
+  const ev = evaluate(fix.lat, fix.lng, fix.acc);
+  if (ev.verdict === 'nobranch') { busy = null; refusal = { title: 'ร้านยังไม่ได้ตั้งตำแหน่ง', text: 'แจ้งเจ้าของร้าน' }; render(); return; }
+  if (ev.verdict === 'refuse') { busy = null; refusal = { title: refuseTitle(ev), text: refuseText(ev) }; render(); return; }
+  await save(type, fix, ev);
+}
+const refuseTitle = (ev) => (ev.noPrecise ? 'ตำแหน่งไม่แม่นยำ' : ev.tooWeak ? 'สัญญาณตำแหน่งไม่ชัด' : 'ยังอยู่นอกร้าน');
+
+async function save(type, fix, ev) {
+  const st = D.state, sid = me.sid, now = serverNow();
+  const lat = Number(fix.lat.toFixed(6)), lng = Number(fix.lng.toFixed(6));
+  const acc = Math.round(fix.acc), dist = Math.floor(ev.d);   // ปัดลง ไม่ให้เกินเกณฑ์ที่ rules ตรวจ (radius x graceFactor)
+  if (type !== 'in' && typeof st?.inAt !== 'number') { busy = null; refusal = { title: 'ข้อมูลกะไม่สมบูรณ์', text: 'แจ้งเจ้าของร้านให้ตรวจสอบ' }; render(); return; }
+  // ธงน่าสงสัย (คำนวณฝั่งเครื่อง ใช้ช่วยคัดให้เจ้าของดูเท่านั้น)
+  const sus = [];
+  if (fix.acc < 3) sus.push('acc');
+  if (st && typeof st.lastLat === 'number' && st.lastLat.toFixed(6) === lat.toFixed(6) && st.lastLng.toFixed(6) === lng.toFixed(6)) sus.push('same');
+  if (st && st.lastBranchId && st.lastBranchId !== ev.bid && typeof st.since === 'number' && now - st.since < 10 * 60000) sus.push('hop');
+  let flag = null, flagReason = null;
+  if (sus.length) { flag = 'suspect'; flagReason = sus.join(','); }
+  else if (ev.verdict === 'borderline') { flag = 'borderline'; flagReason = ev.bReason; }
+
+  const d = type === 'in' ? bangkokDate(now) : st.workDate;
+  const lid = push(A(`logs/${d}/${sid}`)).key;
+  const logPath = `logs/${d}/${sid}/${lid}`;
+  const log = { type, ts: serverTimestamp(), lat, lng, accuracy: acc, distance: dist, branchId: ev.bid, uid: user.uid, source: 'app', clientTs: Date.now() };
+  if (flag) { log.flag = flag; log.flagReason = flagReason; }
+  const stateNew = { status: NEXT[type], workDate: d, since: serverTimestamp(), inAt: type === 'in' ? serverTimestamp() : st.inAt, lastLogId: lid, lastLat: lat, lastLng: lng, lastBranchId: ev.bid };
+  busy = 'saving'; render();
+  const slow = setTimeout(() => { if (busy === 'saving') { busy = 'slow'; render(); } }, 8000);
+  try {
+    await update(A(''), { [logPath]: log, [`state/${sid}`]: stateNew });
+    clearTimeout(slow);
+    let ts = serverNow();
+    try { const snap = await Promise.race([get(A(logPath)), sleep(1000).then(() => null)]); if (snap && snap.val()?.ts) ts = snap.val().ts; } catch (_) { }
+    busy = null; render();
+    showSuccess(type, ts);
+  } catch (e) {
+    clearTimeout(slow);
+    busy = null;
+    refusal = { title: 'บันทึกไม่สำเร็จ', text: 'ลองใหม่อีกครั้ง ถ้ายังไม่ได้ให้แจ้งเจ้าของ' };
+    render();
+  }
+}
+function showSuccess(type, ts) {
+  navigator.vibrate?.(200);
+  const tick = h('div', { class: 'tick' });
+  tick.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>'; // ข้อความคงที่ ไม่ใช่ข้อมูลจาก DB
+  const ov = h('div', { id: 'ov' }, tick, h('div', { class: 'msg' }, `${LABEL[type]} ${fmtTime(ts)}`));
+  document.body.append(ov);
+  setTimeout(() => ov.remove(), 2000);
+}
+function confirmOut() {
+  return new Promise((res) => {
+    const close = (v) => { box.remove(); res(v); };
+    const box = h('div', { id: 'cf' }, h('div', { class: 'box' },
+      h('div', { style: 'font-size:26px;font-weight:800;margin-bottom:6px' }, 'ออกงานตอนนี้ใช่ไหม'),
+      h('button', { class: 'btn red', onclick: () => close(true) }, 'ใช่ ออกงาน'),
+      h('button', { class: 'btn gray', onclick: () => close(false) }, 'ยกเลิก')));
+    document.body.append(box);
+  });
+}
+
+/* ====== ลงทะเบียน ====== */
+async function submitRegistration() {
+  reg.step = 'submitting'; reg.err = ''; render();
+  try {
+    const pinHash = await sha256Hex(reg.sid + reg.pin);
+    await set(A('deviceRequests/' + user.uid), { staffId: reg.sid, pinHash, requestedAt: serverTimestamp(), status: 'pending', userAgent: navigator.userAgent.slice(0, 300) });
+    reg.step = null; reg.pin = '';
+  } catch (e) {
+    reg.step = 'pick'; reg.pin = '';
+    reg.err = 'ส่งคำขอไม่สำเร็จ — ตรวจว่าเน็ตใช้ได้ แล้วลองใหม่ ถ้ายังไม่ได้ให้แจ้งเจ้าของ';
+  }
+  render();
+}
+async function reRegister() {
+  try { localStorage.removeItem('clock.last'); } catch (_) { }
+  try { await remove(A('deviceRequests/' + user.uid)); } catch (_) { }
+  reg = { step: 'pick', sid: null, pin: '', err: '' };
+  render();
+}
+
+/* ====== วาดหน้าจอ ====== */
+let lastKey = '';
+let ui = {};
+
+function currentView() {
+  if (!user || !D.staff || !D.branches || D.req === undefined) return 'LOADING';
+  if (me) {
+    if (me.s.active === false) return 'DISABLED';
+    if (D.state === undefined) return 'LOADING_MAIN';
+    return 'MAIN';
+  }
+  if (reg.step === 'submitting') return 'SUBMITTING';
+  if (reg.step === 'pin') return 'PIN';
+  if (reg.step === 'loc') return 'LOC';
+  if (reg.step === 'pick') return 'PICK';
+  if (D.req) return D.req.status === 'rejected' ? 'REJECTED' : 'WAITING';
+  const last = getLast(); if (last && last.sid) return 'REVOKED';
+  if (isIOS && navigator.standalone !== true && !sessionStorage.getItem('clock.skipInstall')) return 'INSTALL';
+  return 'PICK';
+}
+
+function viewKey(v) {
+  if (v === 'MAIN') return ['MAIN', mainMode(), busy ? 'b' : '', refusal ? refusal.title : '', cooldownShown ? 'c' : '', connected ? '' : 'off', permState === 'granted' ? '' : permState].join('|');
+  if (v === 'PIN') return 'PIN' + reg.sid + reg.pin.length + reg.err;
+  if (v === 'PICK') return 'PICK' + reg.err + Object.keys(D.staff || {}).join();
+  if (v === 'WAITING') return 'WAITING' + (D.req ? D.req.staffId : '');
+  return v;
+}
+
+function render() {
+  const v = currentView();
+  const key = viewKey(v);
+  if (key !== lastKey) { lastKey = key; clear($root); ui = {}; build(v); }
+  updateDynamic();
+}
+
+function build(v) {
+  switch (v) {
+    case 'LOADING': return buildLoading(false);
+    case 'LOADING_MAIN': return buildLoading(true);
+    case 'DISABLED': return $root.append(card('บัญชีนี้ถูกปิดใช้งาน', h('div', null, 'ติดต่อเจ้าของร้าน')));
+    case 'INSTALL': return buildInstall();
+    case 'PICK': return buildPick();
+    case 'PIN': return buildPin();
+    case 'LOC': return buildLoc();
+    case 'SUBMITTING': return $root.append(card('กำลังส่งคำขอ...'));
+    case 'WAITING': return $root.append(card('รอเจ้าของอนุมัติเครื่องนี้', h('div', null, 'เมื่ออนุมัติแล้วหน้านี้จะเปลี่ยนเอง')));
+    case 'REJECTED': return $root.append(card('เจ้าของยังไม่อนุมัติ', h('div', null, 'ตรวจว่าเลือกชื่อและใส่รหัสถูก แล้วลงทะเบียนใหม่'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
+    case 'REVOKED': return $root.append(card('เครื่องนี้ถูกยกเลิกการผูกแล้ว', h('div', null, 'ลงทะเบียนใหม่เพื่อใช้งานต่อ'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
+    case 'MAIN': return buildMain();
+  }
+}
+
+function buildLoading(withName) {
+  const last = getLast(); const name = (me && me.s.nickname) || (last && last.nickname) || '';
+  $root.append(h('div', { class: 'hdr' }, h('span', null, name ? 'สวัสดี ' + name : 'กำลังโหลด...')));
+  if (withName) $root.append(h('button', { class: 'big c-gray', disabled: true }, 'กำลังโหลด...'));
+  else $root.append(h('div', { class: 'bar' }, 'กำลังเชื่อมต่อ...'));
+}
+
+function buildInstall() {
+  $root.append(card('ติดตั้งแอปก่อนลงทะเบียน',
+    h('div', null, 'บน iPhone แอปที่อยู่บนหน้าจอโฮมแยกข้อมูลจาก Safari ถ้าลงทะเบียนใน Safari ก่อน ต้องลงทะเบียนใหม่อีกรอบหลังติดตั้ง'),
+    h('ol', null, h('li', null, 'แตะปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ด้านล่าง Safari'), h('li', null, 'เลือก "เพิ่มไปยังหน้าจอโฮม"'), h('li', null, 'เปิดแอป "ลงเวลา" จากไอคอนบนหน้าจอโฮม แล้วค่อยลงทะเบียน'))));
+  $root.append(h('button', { class: 'btn link', onclick: () => { sessionStorage.setItem('clock.skipInstall', '1'); render(); } }, 'ใช้ในเบราว์เซอร์ต่อ'));
+}
+
+function buildPick() {
+  $root.append(h('div', { class: 'hdr' }, h('span', null, 'ลงทะเบียนเครื่องนี้')));
+  $root.append(h('div', { class: 'small' }, 'แตะชื่อของคุณ'));
+  if (reg.err) $root.append(h('div', { class: 'err' }, reg.err));
+  const g = h('div', { class: 'names' });
+  const list = Object.entries(D.staff || {}).filter(([, s]) => s && s.active === true).sort((a, b) => a[1].nickname.localeCompare(b[1].nickname, 'th'));
+  for (const [sid, s] of list) g.append(h('button', { onclick: () => { reg = { step: 'pin', sid, pin: '', err: '' }; render(); } }, s.nickname));
+  $root.append(g);
+  if (!list.length) $root.append(card('ยังไม่มีรายชื่อพนักงาน', h('div', null, 'แจ้งเจ้าของร้านให้เพิ่มชื่อก่อน')));
+}
+
+function buildPin() {
+  const s = (D.staff || {})[reg.sid];
+  $root.append(h('div', { class: 'hdr' }, h('span', null, 'สวัสดี ' + (s ? s.nickname : ''))));
+  $root.append(h('div', { class: 'small', style: 'text-align:center' }, 'ใส่รหัส 4 หลัก'));
+  const dots = h('div', { class: 'dots' }, [0, 1, 2, 3].map((i) => h('i', { class: i < reg.pin.length ? 'on' : '' })));
+  $root.append(dots, h('div', { class: 'err' }, reg.err));
+  const pad = h('div', { class: 'pad' });
+  const press = (k) => {
+    if (k === 'del') reg.pin = reg.pin.slice(0, -1);
+    else if (reg.pin.length < 4) reg.pin += k;
+    if (reg.pin.length === 4) { reg.step = 'loc'; }
+    render();
+  };
+  for (const k of ['1', '2', '3', '4', '5', '6', '7', '8', '9']) pad.append(h('button', { onclick: () => press(k) }, k));
+  pad.append(h('button', { class: 'x', onclick: () => { reg = { step: 'pick', sid: null, pin: '', err: '' }; render(); } }, '←'), h('button', { onclick: () => press('0') }, '0'), h('button', { class: 'x', onclick: () => press('del') }, '⌫'));
+  $root.append(pad);
+}
+
+function buildLoc() {
+  $root.append(card('ขออนุญาตใช้ตำแหน่ง', h('div', null, 'ร้านใช้ตำแหน่งเฉพาะตอนกดปุ่ม เพื่อยืนยันว่าอยู่ที่ร้าน')));
+  $root.append(h('button', { class: 'btn', onclick: async () => { try { await gp({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }); } catch (_) { } submitRegistration(); } }, 'อนุญาต แล้วส่งคำขอ'));
+  $root.append(h('button', { class: 'btn link', onclick: () => submitRegistration() }, 'ข้ามไปก่อน'));
+}
+
+function buildMain() {
+  const mode = mainMode();
+  ui.hdrName = h('span');
+  ui.branch = h('span', { class: 'br' });
+  $root.append(h('div', { class: 'hdr' }, ui.hdrName, ui.branch));
+  ui.offline = h('div', { class: 'bar y' }, 'ไม่มีอินเทอร์เน็ต — ต่อเน็ตแล้วกดใหม่');
+  ui.offline.classList.toggle('hidden', connected);
+  $root.append(ui.offline);
+  ui.live = h('div', { class: 'bar' });
+  $root.append(ui.live);
+  if (permState === 'prompt' || permState === 'unknown') {
+    $root.append(card(null, h('div', null, 'ร้านใช้ตำแหน่งเฉพาะตอนกดปุ่ม เพื่อยืนยันว่าอยู่ที่ร้าน'), h('button', { class: 'btn blue', onclick: askLocation }, 'อนุญาตตำแหน่ง')));
+  } else if (permState === 'denied') {
+    const g = geoErr({ code: 1 });
+    $root.append(card(g.title, h('div', null, g.text), h('button', { class: 'btn blue', onclick: askLocation }, 'ลองใหม่')));
+  }
+  ui.note = h('div');
+  $root.append(ui.note);
+
+  const next = { OFF: 'in', STALE: 'in', WORKING: 'break_start', ON_BREAK: 'break_end' }[mode];
+  ui.main = h('button', { class: 'big', onclick: () => next && act(next) });
+  ui.mainLabel = h('span'); ui.mainSub = h('small');
+  ui.timer = h('span', { class: 'timer' });
+  ui.main.append(ui.mainLabel);
+  if (mode === 'ON_BREAK') ui.main.append(ui.timer);
+  ui.main.append(ui.mainSub);
+  $root.append(ui.main);
+  if (mode === 'WORKING') $root.append(h('button', { class: 'sec', onclick: () => act('out') }, 'ออกงาน'));
+  ui.tl = h('div', { class: 'tl' });
+  $root.append(ui.tl);
+}
+
+function updateDynamic() {
+  if (currentView() !== 'MAIN' || !ui.main) return;
+  const mode = mainMode(), now = serverNow(), st = D.state;
+  ui.hdrName.textContent = 'สวัสดี ' + me.s.nickname;
+  // สาขา + แถบระยะสด
+  const fresh = liveFix && Date.now() - liveFix.t <= 20000;
+  let ev = fresh ? evaluate(liveFix.lat, liveFix.lng, liveFix.acc) : null;
+  const homeBranch = (D.branches || {})[me.s.branchId];
+  ui.branch.textContent = (ev && ev.branch ? ev.branch.name : homeBranch && homeBranch.name) || '';
+  let cls = 'bar', txt;
+  if (permState !== 'granted') txt = permState === 'denied' ? 'ยังไม่ได้อนุญาตตำแหน่ง' : 'ยังไม่ได้อนุญาตตำแหน่ง';
+  else if (!ev) txt = 'กำลังหาตำแหน่ง...';
+  else if (ev.verdict === 'nobranch') txt = 'ร้านยังไม่ได้ตั้งตำแหน่ง — แจ้งเจ้าของ';
+  else if (ev.verdict === 'ok') { cls += ' g'; txt = `● อยู่ในร้าน (ห่าง ${fmtDist(ev.d)})`; }
+  else if (ev.verdict === 'borderline') { cls += ' o'; txt = `● ใกล้ขอบเขตร้าน (ห่าง ${fmtDist(ev.d)})`; }
+  else if (ev.tooWeak || ev.noPrecise) { txt = 'สัญญาณตำแหน่งยังไม่ชัด'; }
+  else { cls += ' r'; txt = `● อยู่นอกร้าน (ห่าง ${fmtDist(ev.d)})`; }
+  ui.live.className = cls; ui.live.textContent = txt;
+
+  ui.offline.classList.toggle('hidden', connected);
+
+  // ปุ่มหลัก
+  const brkMs = (() => { const s = summarize(D.logs); return s.breakMs + (s.openBreak != null ? now - s.openBreak : 0); })();
+  const sum = summarize(D.logs);
+  const nextType = { OFF: 'in', STALE: 'in', WORKING: 'break_start', ON_BREAK: 'break_end' }[mode];
+  const disabled = !connected || !!busy || mode === 'DONE';
+  ui.main.disabled = disabled;
+  ui.main.className = 'big ' + (disabled && !busy ? 'c-gray' : mode === 'DONE' ? 'c-gray' : BTN_CLS[nextType] || 'c-gray');
+  if (busy === 'locating') { ui.mainLabel.textContent = 'กำลังหาตำแหน่ง...'; ui.mainSub.textContent = 'รอสักครู่'; ui.main.className = 'big c-gray'; }
+  else if (busy === 'saving') { ui.mainLabel.textContent = 'กำลังบันทึก...'; ui.mainSub.textContent = ''; ui.main.className = 'big c-gray'; }
+  else if (busy === 'slow') { ui.mainLabel.textContent = 'เน็ตช้า กำลังส่ง...'; ui.mainSub.textContent = 'อย่าปิดแอป'; ui.main.className = 'big c-gray'; }
+  else if (mode === 'DONE') {
+    ui.mainLabel.textContent = 'ออกงานแล้ว';
+    ui.mainSub.textContent = sum.inTs != null && sum.outTs != null ? `ทำงาน ${fmtMin((sum.outTs - sum.inTs - sum.breakMs) / 60000)} · พัก ${fmtMin(sum.breakMs / 60000)}` : '';
+  } else if (mode === 'ON_BREAK') {
+    ui.mainLabel.textContent = LABEL.break_end;
+    ui.timer.textContent = fmtClock(sum.openBreak != null ? now - sum.openBreak : 0);
+    const lim = Number(((D.branches || {})[st.lastBranchId] || homeBranch || {}).breakLimitMin ?? 60) * 60000;
+    ui.timer.classList.toggle('over', brkMs > lim);
+    ui.mainSub.textContent = `พักรวมวันนี้ ${fmtMin(brkMs / 60000)}`;
+    ui.main.style.background = brkMs > lim ? '#ea580c' : '';
+  } else { ui.mainLabel.textContent = LABEL[nextType]; ui.mainSub.textContent = ''; }
+
+  // ข้อความแจ้ง
+  clear(ui.note);
+  if (mode === 'STALE') ui.note.append(card('กะก่อนยังไม่ได้กดออกงาน', h('div', null, 'แจ้งเจ้าของให้แก้ แล้วกดเข้างานของวันนี้ได้เลย')));
+  if (cooldownShown) {
+    const left = st && typeof st.since === 'number' ? Math.ceil((COOLDOWN_MS - (now - st.since)) / 1000) : 0;
+    if (left > 0) ui.note.append(card('เพิ่งกดไปเมื่อสักครู่', h('div', null, `รออีก ${left} วินาที`)));
+    else { cooldownShown = false; }
+  }
+  if (refusal) ui.note.append(card(refusal.title, h('div', null, refusal.text), h('button', { class: 'btn gray', onclick: () => { refusal = null; render(); } }, 'ปิด')));
+
+  // ไทม์ไลน์
+  const ev2 = sum.ev;
+  const lab = timelineDate() === bangkokDate(now) ? 'วันนี้' : 'กะวันที่ ' + timelineDate();
+  ui.tl.textContent = ev2.length ? `${lab}: ` + ev2.map((e) => `${TL[e.type]} ${fmtTime(e.ts)}`).join(' · ') : `${lab}: ยังไม่มีรายการ`;
+}
+
+/* ====== เริ่มทำงาน ====== */
+setInterval(() => {
+  if (currentView() === 'MAIN') {
+    // ข้ามวันหรือครบ 16 ชม. แล้วโหมดอาจเปลี่ยน
+    syncLogs(); render();
+  }
+}, 1000);
+setInterval(() => { if (currentView() === 'MAIN') updateDynamic(); }, 5000);
+
+onAuthStateChanged(auth, async (u) => {
+  if (!u) { try { await signInAnonymously(auth); } catch (e) { $root.append(card('เชื่อมต่อไม่ได้', h('div', null, 'ตรวจอินเทอร์เน็ต แล้วเปิดแอปใหม่'))); } return; }
+  if (user && user.uid === u.uid) return;
+  user = u;
+  attachUser();
+  initPermission();
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
