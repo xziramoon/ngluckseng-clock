@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ทดสอบรัศมี GPS</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 18px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2328; background: #f4f6f8; }
+  header { padding: 12px 16px; background: #1a7f37; color: #fff; font-weight: 600; }
+  header small { display: block; font-weight: 400; font-size: 14px; opacity: .9; }
+  main { padding: 12px 16px 32px; max-width: 640px; margin: 0 auto; }
+  .card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  h2 { font-size: 18px; margin: 0 0 8px; }
+  #map { height: 300px; border-radius: 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 12px 14px; background: #0969da; color: #fff; cursor: pointer; }
+  button.sec { background: #eaeef2; color: #1f2328; }
+  button:disabled { background: #afb8c1; }
+  label { display: block; margin-top: 10px; font-size: 16px; }
+  input[type=range] { width: 100%; }
+  input[type=number], input[type=text] { font: inherit; width: 100%; padding: 8px; border: 1px solid #d0d7de; border-radius: 8px; }
+  .status { border-radius: 12px; padding: 16px; color: #fff; text-align: center; }
+  .status b { display: block; font-size: 28px; }
+  .s-ok { background: #1a7f37; } .s-border { background: #bc4c00; } .s-refuse { background: #cf222e; } .s-wait { background: #6e7781; }
+  .big { width: 100%; padding: 22px; font-size: 26px; margin-top: 12px; background: #1a7f37; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 16px; margin-top: 10px; }
+  .kv span:nth-child(odd) { color: #57606a; }
+  #log { font-size: 15px; margin: 0; padding-left: 20px; }
+  #log li { margin-bottom: 4px; }
+  .muted { color: #57606a; font-size: 15px; }
+</style>
+</head>
+<body>
+<header>ทดสอบรัศมี GPS<small>หน้านี้ทดสอบอย่างเดียว ไม่บันทึกข้อมูลขึ้นเซิร์ฟเวอร์</small></header>
+<main>
+  <div class="card">
+    <h2>1. ตั้งจุดร้าน</h2>
+    <div id="map"></div>
+    <p class="muted">แตะบนแผนที่ หรือลากหมุด เพื่อย้ายจุดร้าน · วงกลมทึบ = รัศมี · เส้นประ = ขอบชายขอบ</p>
+    <div class="row">
+      <button id="hereBtn">ใช้ตำแหน่งตอนนี้เป็นจุดร้าน</button>
+    </div>
+    <label>พิกัดร้าน (วางจาก Google Maps ได้ เช่น 13.7563, 100.5018)
+      <input type="text" id="coord" inputmode="decimal">
+    </label>
+  </div>
+
+  <div class="card">
+    <h2>2. ปรับค่า</h2>
+    <label>รัศมี: <b id="rv"></b> ม.<input type="range" id="radius" min="30" max="300" step="5"></label>
+    <label>ความแม่นยำที่ยอมรับ (maxAccuracy) ม.<input type="number" id="maxAcc" min="5" max="500"></label>
+    <label>ตัวคูณชายขอบ (graceFactor)<input type="number" id="grace" min="1" max="3" step="0.1"></label>
+  </div>
+
+  <div class="card">
+    <h2>3. ผลสด (อัปเดตเองเมื่อเดิน)</h2>
+    <div id="status" class="status s-wait"><b>รอตำแหน่ง...</b><span id="statusSub">อนุญาตตำแหน่งเมื่อเบราว์เซอร์ถาม</span></div>
+    <div class="kv">
+      <span>ระยะจากร้าน</span><span id="kDist">–</span>
+      <span>ความแม่นยำ (±)</span><span id="kAcc">–</span>
+      <span>อัปเดตล่าสุด</span><span id="kTime">–</span>
+    </div>
+    <button class="big" id="testBtn">ทดสอบกด "เข้างาน"</button>
+    <p class="muted">ปุ่มนี้อ่านตำแหน่ง 3 ครั้งแบบเดียวกับแอปจริง แล้วบอกว่าจะบันทึกได้หรือไม่</p>
+  </div>
+
+  <div class="card">
+    <h2>ประวัติการทดสอบ</h2>
+    <ol id="log"></ol>
+    <div class="row"><button class="sec" id="clearBtn">ล้างประวัติ</button></div>
+  </div>
+</main>
+<script>
+/* ตรรกะ geofence ชุดเดียวกับ clock.html (haversine / evaluate / sampleFix) */
+const KEY = 'gpsTest.v1';
+const S = Object.assign({ lat: 13.7563, lng: 100.5018, radius: 80, maxAccuracy: 60, graceFactor: 1.5, log: [] },
+  (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (_) { return {}; } })());
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_) {} };
+const $ = (id) => document.getElementById(id);
+
+function haversine(la1, ln1, la2, ln2) {
+  const R = 6371008.8, r = Math.PI / 180;
+  const dLa = (la2 - la1) * r, dLn = (ln2 - ln1) * r;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLn / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+function evaluate(lat, lng, a) {
+  const R = S.radius, M = S.maxAccuracy, g = S.graceFactor;
+  const d = haversine(lat, lng, S.lat, S.lng);
+  let verdict;
+  if (d <= R && a <= M) verdict = 'ok';
+  else if ((d > R && d <= R * g && a <= M) || (d <= R && a > M && a <= 2 * M)) verdict = 'borderline';
+  else verdict = 'refuse';
+  return { verdict, d, a, tooWeak: a > 2 * M, noPrecise: a > 1000 };
+}
+const fmtDist = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' กม.' : Math.round(m) + ' ม.';
+const fmtTime = (t) => new Date(t).toLocaleTimeString('th-TH', { hour12: false });
+function describe(ev) {
+  if (ev.verdict === 'ok') return ['บันทึกได้', 'อยู่ในร้าน (ห่าง ' + fmtDist(ev.d) + ')', 's-ok'];
+  if (ev.verdict === 'borderline') return ['บันทึกได้ (ติดธงชายขอบ)', 'ใกล้ขอบเขตร้าน (ห่าง ' + fmtDist(ev.d) + ')', 's-border'];
+  if (ev.noPrecise) return ['บันทึกไม่ได้', 'มือถือปิด "ตำแหน่งที่แม่นยำ" อยู่', 's-refuse'];
+  if (ev.tooWeak) return ['บันทึกไม่ได้', 'สัญญาณตำแหน่งยังไม่ชัด (±' + Math.round(ev.a) + ' ม.)', 's-refuse'];
+  return ['บันทึกไม่ได้', 'อยู่ห่างร้าน ' + fmtDist(ev.d) + ' — เดินเข้าใกล้ร้านอีกนิด', 's-refuse'];
+}
+
+/* ----- แผนที่ ----- */
+const map = L.map('map').setView([S.lat, S.lng], 17);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+const pin = L.marker([S.lat, S.lng], { draggable: true }).addTo(map);
+const circle = L.circle([S.lat, S.lng], { radius: S.radius, color: '#1a7f37', fillOpacity: .15 }).addTo(map);
+const graceCircle = L.circle([S.lat, S.lng], { radius: S.radius * S.graceFactor, color: '#bc4c00', fill: false, dashArray: '6 6', weight: 2 }).addTo(map);
+const me = L.circleMarker([0, 0], { radius: 7, color: '#fff', weight: 2, fillColor: '#0969da', fillOpacity: 1 });
+const meAcc = L.circle([0, 0], { radius: 1, color: '#0969da', weight: 1, fillOpacity: .1 });
+
+function setShop(lat, lng) {
+  S.lat = +lat.toFixed(6); S.lng = +lng.toFixed(6);
+  pin.setLatLng([S.lat, S.lng]); circle.setLatLng([S.lat, S.lng]); graceCircle.setLatLng([S.lat, S.lng]);
+  $('coord').value = S.lat + ', ' + S.lng; save(); refresh();
+}
+pin.on('dragend', () => { const p = pin.getLatLng(); setShop(p.lat, p.lng); });
+map.on('click', (e) => setShop(e.latlng.lat, e.latlng.lng));
+$('coord').addEventListener('change', () => {
+  const m = $('coord').value.match(/(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)/);
+  if (m) { setShop(+m[1], +m[2]); map.setView([S.lat, S.lng]); }
+});
+
+/* ----- ค่า ----- */
+function applySettings() {
+  S.radius = +$('radius').value; S.maxAccuracy = +$('maxAcc').value || 60; S.graceFactor = +$('grace').value || 1.5;
+  $('rv').textContent = S.radius;
+  circle.setRadius(S.radius); graceCircle.setRadius(S.radius * S.graceFactor);
+  save(); refresh();
+}
+$('radius').value = S.radius; $('maxAcc').value = S.maxAccuracy; $('grace').value = S.graceFactor;
+['radius', 'maxAcc', 'grace'].forEach((id) => $(id).addEventListener('input', applySettings));
+
+/* ----- ตำแหน่งสด ----- */
+let live = null;
+function refresh() {
+  if (!live) return;
+  const ev = evaluate(live.lat, live.lng, live.acc);
+  const [title, sub, cls] = describe(ev);
+  $('status').className = 'status ' + cls;
+  $('status').firstElementChild.textContent = title;
+  $('statusSub').textContent = sub;
+  $('kDist').textContent = fmtDist(ev.d);
+  $('kAcc').textContent = Math.round(live.acc) + ' ม.';
+  $('kTime').textContent = fmtTime(live.t);
+}
+if (!navigator.geolocation || !isSecureContext) {
+  $('statusSub').textContent = 'ต้องเปิดจากลิงก์ https เท่านั้น';
+} else {
+  navigator.geolocation.watchPosition((p) => {
+    live = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
+    me.setLatLng([live.lat, live.lng]).addTo(map); meAcc.setLatLng([live.lat, live.lng]).setRadius(live.acc).addTo(map);
+    refresh();
+  }, (e) => {
+    $('status').className = 'status s-wait';
+    $('status').firstElementChild.textContent = 'ยังไม่ได้ตำแหน่ง';
+    $('statusSub').textContent = e.code === 1 ? 'ยังไม่ได้อนุญาตให้ใช้ตำแหน่ง — เปิดสิทธิ์ตำแหน่งให้เว็บนี้' : 'หาตำแหน่งไม่ได้ — ออกไปที่โล่งแล้วรอสักครู่';
+  }, { enableHighAccuracy: true, maximumAge: 5000 });
+}
+
+const gp = (o) => new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, o));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function sampleFix() {
+  const t0 = Date.now(), samples = []; let lastErr = null;
+  for (;;) {
+    const el = Date.now() - t0;
+    if (samples.length >= 3 || el >= 12000 || (el >= 6000 && samples.length >= 1)) break;
+    try {
+      const p = await gp({ enableHighAccuracy: true, timeout: Math.min(10000, 12000 - el), maximumAge: 0 });
+      samples.push({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy });
+    } catch (e) { lastErr = e; if (e.code === 1) break; await sleep(500); }
+  }
+  if (live && live.t >= t0) samples.push(live);
+  if (!samples.length) throw lastErr || { code: 3 };
+  return { best: samples.reduce((a, b) => (b.acc < a.acc ? b : a)), n: samples.length, ms: Date.now() - t0 };
+}
+
+$('hereBtn').addEventListener('click', async () => {
+  $('hereBtn').disabled = true; $('hereBtn').textContent = 'กำลังหาตำแหน่ง...';
+  try { const { best } = await sampleFix(); setShop(best.lat, best.lng); map.setView([S.lat, S.lng], 18);
+        alert('ตั้งจุดร้านแล้ว (แม่นยำ ±' + Math.round(best.acc) + ' ม.)'); }
+  catch (_) { alert('หาตำแหน่งไม่ได้ ลองใหม่อีกครั้ง'); }
+  $('hereBtn').disabled = false; $('hereBtn').textContent = 'ใช้ตำแหน่งตอนนี้เป็นจุดร้าน';
+});
+
+function renderLog() {
+  const ol = $('log'); ol.replaceChildren();
+  for (const r of S.log.slice().reverse()) {
+    const li = document.createElement('li');
+    li.textContent = `${fmtTime(r.t)} · ${r.title} · ห่าง ${fmtDist(r.d)} · ±${Math.round(r.a)} ม. · รัศมี ${r.R} ม. · ${(r.ms / 1000).toFixed(1)} วิ`;
+    ol.appendChild(li);
+  }
+}
+$('testBtn').addEventListener('click', async () => {
+  const b = $('testBtn'); b.disabled = true; b.textContent = 'กำลังหาตำแหน่ง...';
+  try {
+    const { best, ms } = await sampleFix();
+    const ev = evaluate(best.lat, best.lng, best.acc);
+    const [title, sub] = describe(ev);
+    if (ev.verdict !== 'refuse') navigator.vibrate?.(200);
+    S.log.push({ t: Date.now(), title, d: ev.d, a: ev.a, R: S.radius, ms }); S.log = S.log.slice(-50); save(); renderLog();
+    alert(title + '\n' + sub);
+  } catch (e) { alert(e && e.code === 1 ? 'ยังไม่ได้อนุญาตให้ใช้ตำแหน่ง' : 'หาตำแหน่งนานเกินไป — ออกไปใกล้ประตูหรือที่โล่ง แล้วกดใหม่'); }
+  b.disabled = false; b.textContent = 'ทดสอบกด "เข้างาน"';
+});
+$('clearBtn').addEventListener('click', () => { S.log = []; save(); renderLog(); });
+
+$('coord').value = S.lat + ', ' + S.lng;
+applySettings(); renderLog();
+</script>
+</body>
+</html>
