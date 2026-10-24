@@ -597,8 +597,8 @@ function buildBranchCard(bid, b) {
 
   const map = L.map(mapDiv).setView(has ? [b.lat, b.lng] : THAI_CENTER, has ? 17 : 6);
   const layers = {
-    'ดาวเทียม': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery &copy; Esri' }),
-    'แผนที่ถนน': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' })
+    'ดาวเทียม': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri' }),
+    'แผนที่ถนน': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' })
   };
   layers['ดาวเทียม'].addTo(map);
   L.control.layers(layers, null, { collapsed: false }).addTo(map);

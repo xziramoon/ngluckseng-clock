@@ -93,8 +93,8 @@
 <script>
 /* ตรรกะ geofence ชุดเดียวกับ clock.html (haversine / evaluate / sampleFix) */
 const $ = (id) => document.getElementById(id);
-const OSM = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }];
-const SAT = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery &copy; Esri' }];
+const OSM = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap' }];
+const SAT = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri' }];
 function baseLayers(map, sat) {
   const layers = { 'ดาวเทียม': L.tileLayer(...SAT), 'แผนที่ถนน': L.tileLayer(...OSM) };
   (sat ? layers['ดาวเทียม'] : layers['แผนที่ถนน']).addTo(map);
@@ -118,7 +118,7 @@ if (!CHECK) {
   $('setup').hidden = false;
   $('hdrSub').textContent = 'โหมดปักจุดร้าน (ใช้บน PC) — ไม่บันทึกข้อมูลขึ้นเซิร์ฟเวอร์';
   const KEY = 'gpsTest.setup.v2';
-  const S = Object.assign({ lat: 13.7563, lng: 100.5018, radius: 10, maxAccuracy: 20, graceFactor: 1.5 },
+  const S = Object.assign({ lat: 17.318126, lng: 99.832053, radius: 10, maxAccuracy: 20, graceFactor: 1.5 },
     (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (_) { return {}; } })());
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_) {} };
 
