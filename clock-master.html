@@ -572,8 +572,8 @@ function buildBranchCard(bid, b) {
     name: h('input', { type: 'text', maxlength: 40, size: 24 }),
     lat: h('input', { type: 'text', size: 12, placeholder: '13.xxxxx หรือวาง "13.x, 100.x"' }),
     lng: h('input', { type: 'text', size: 12 }),
-    radius: h('input', { type: 'range', min: 30, max: 300, step: 5 }),
-    radiusN: h('input', { type: 'number', min: 30, max: 300, step: 5, style: 'width:80px' }),
+    radius: h('input', { type: 'range', min: 10, max: 300, step: 5 }),
+    radiusN: h('input', { type: 'number', min: 10, max: 300, step: 5, style: 'width:80px' }),
     maxAcc: h('input', { type: 'number', min: 5, max: 500, style: 'width:80px' }),
     grace: h('input', { type: 'number', min: 1, max: 3, step: 0.1, style: 'width:80px' }),
     brk: h('input', { type: 'number', min: 0, max: 600, style: 'width:80px' }),
@@ -589,7 +589,7 @@ function buildBranchCard(bid, b) {
     h('div', { class: 'row' }, h('label', null, 'ชื่อสาขา', f.name), h('label', null, 'ละติจูด', f.lat), h('label', null, 'ลองจิจูด', f.lng), geoBtn),
     accMsg, mapDiv,
     h('div', { class: 'row' },
-      h('label', null, 'รัศมี (เมตร) 30-300', f.radius), h('label', null, ' ', f.radiusN),
+      h('label', null, 'รัศมี (เมตร) 10-300', f.radius), h('label', null, ' ', f.radiusN),
       h('label', null, 'แม่นยำสูงสุดที่ยอมรับ (ม.)', f.maxAcc), h('label', null, 'ตัวคูณชายขอบ', f.grace),
       h('label', null, 'พักได้ไม่เกิน (นาที)', f.brk),
       h('label', null, 'เปิดใช้งาน', f.active)),
@@ -600,7 +600,7 @@ function buildBranchCard(bid, b) {
   let marker = null, circle = null, dirty = false;
   const setDirty = (v) => { dirty = v; saveBtn.disabled = !v; };
   function draw(lat, lng) {
-    const r = Number(f.radius.value) || 80;
+    const r = Number(f.radius.value) || 10;
     if (!marker) {
       marker = L.marker([lat, lng], { draggable: true }).addTo(map);
       circle = L.circle([lat, lng], { radius: r, color: '#16a34a', fillOpacity: .15 }).addTo(map);
@@ -610,7 +610,7 @@ function buildBranchCard(bid, b) {
     circle.setRadius(r);
   }
   function fill(bb) {
-    f.name.value = bb.name || ''; f.radius.value = f.radiusN.value = bb.radius ?? 80;
+    f.name.value = bb.name || ''; f.radius.value = f.radiusN.value = bb.radius ?? 10;
     f.maxAcc.value = bb.maxAccuracy ?? 60; f.grace.value = bb.graceFactor ?? 1.5; f.brk.value = bb.breakLimitMin ?? 60;
     f.active.checked = bb.active !== false;
     if (typeof bb.lat === 'number' && typeof bb.lng === 'number') { f.lat.value = bb.lat; f.lng.value = bb.lng; draw(bb.lat, bb.lng); map.setView([bb.lat, bb.lng], map.getZoom() < 15 ? 17 : map.getZoom(), { animate: false }); }
@@ -620,7 +620,7 @@ function buildBranchCard(bid, b) {
   fill(b);
   map.on('click', (e) => { f.lat.value = e.latlng.lat.toFixed(6); f.lng.value = e.latlng.lng.toFixed(6); draw(e.latlng.lat, e.latlng.lng); setDirty(true); });
   f.radius.addEventListener('input', () => { f.radiusN.value = f.radius.value; circle?.setRadius(Number(f.radius.value)); setDirty(true); });
-  f.radiusN.addEventListener('input', () => { f.radius.value = f.radiusN.value; circle?.setRadius(Number(f.radiusN.value) || 80); setDirty(true); });
+  f.radiusN.addEventListener('input', () => { f.radius.value = f.radiusN.value; circle?.setRadius(Number(f.radiusN.value) || 10); setDirty(true); });
   const fromInputs = () => { const la = parseFloat(f.lat.value), ln = parseFloat(f.lng.value); if (isFinite(la) && isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180) { draw(la, ln); map.setView([la, ln]); } setDirty(true); };
   f.lat.addEventListener('input', () => { const p = f.lat.value.includes(',') ? parseLatLng(f.lat.value) : null; if (p) { f.lat.value = p[0]; f.lng.value = p[1]; } fromInputs(); });
   f.lng.addEventListener('input', fromInputs);
@@ -649,7 +649,7 @@ function buildBranchCard(bid, b) {
     const nm = f.name.value.trim();
     const v = { name: nm, radius: Number(f.radiusN.value), maxAccuracy: Number(f.maxAcc.value), graceFactor: Number(f.grace.value), breakLimitMin: Number(f.brk.value), active: f.active.checked, updatedAt: serverTimestamp() };
     if (!nm) return (err.textContent = 'กรอกชื่อสาขา');
-    if (!(v.radius >= 30 && v.radius <= 300)) return (err.textContent = 'รัศมีต้องอยู่ระหว่าง 30-300 เมตร');
+    if (!(v.radius >= 10 && v.radius <= 300)) return (err.textContent = 'รัศมีต้องอยู่ระหว่าง 10-300 เมตร');
     if (!(v.maxAccuracy >= 5 && v.maxAccuracy <= 500)) return (err.textContent = 'ค่าแม่นยำต้องอยู่ระหว่าง 5-500');
     if (!(v.graceFactor >= 1 && v.graceFactor <= 3)) return (err.textContent = 'ตัวคูณชายขอบต้องอยู่ระหว่าง 1-3');
     if (!(v.breakLimitMin >= 0 && v.breakLimitMin <= 600)) return (err.textContent = 'เวลาพักต้องอยู่ระหว่าง 0-600 นาที');
@@ -695,7 +695,7 @@ function renderBranches() {
   }
 }
 async function seedBranches() {
-  const base = { radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60, active: true, updatedAt: serverTimestamp() };
+  const base = { radius: 10, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60, active: true, updatedAt: serverTimestamp() };
   try {
     await update(A(''), {
       'branches/wongwian': { name: 'สาขาวงเวียน', ...base },

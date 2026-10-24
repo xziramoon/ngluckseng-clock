@@ -282,6 +282,8 @@ describe('Security Rules attendance/', () => {
     await assertSucceeds(set(ref(db, A('settings/lateGraceMin')), 5));
     await assertSucceeds(update(ref(db, A('branches/b1')), { radius: 120, lat: 13.71, lng: 100.51 }));
     await assertFails(set(ref(db, A('branches/b3')), { name: 'x', radius: 5000, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
+    await assertSucceeds(set(ref(db, A('branches/b4')), { name: 'x', radius: 10, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
+    await assertFails(set(ref(db, A('branches/b5')), { name: 'x', radius: 5, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
     await assertFails(set(ref(db, A('branches/BAD ID')), { name: 'x', radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
     // เพิ่มพนักงาน (multi-path staff + staffSecret)
     await assertSucceeds(update(ref(db), {

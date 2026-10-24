@@ -34,7 +34,7 @@
             ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
           },
           "radius": {
-            ".validate": "newData.isNumber() && newData.val() >= 30 && newData.val() <= 300"
+            ".validate": "newData.isNumber() && newData.val() >= 10 && newData.val() <= 300"
           },
           "maxAccuracy": {
             ".validate": "newData.isNumber() && newData.val() >= 5 && newData.val() <= 500"
