@@ -596,7 +596,12 @@ function buildBranchCard(bid, b) {
     err, h('div', { class: 'row' }, saveBtn));
 
   const map = L.map(mapDiv).setView(has ? [b.lat, b.lng] : THAI_CENTER, has ? 17 : 6);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+  const layers = {
+    'ดาวเทียม': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery &copy; Esri' }),
+    'แผนที่ถนน': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' })
+  };
+  layers['ดาวเทียม'].addTo(map);
+  L.control.layers(layers, null, { collapsed: false }).addTo(map);
   let marker = null, circle = null, dirty = false;
   const setDirty = (v) => { dirty = v; saveBtn.disabled = !v; };
   function draw(lat, lng) {
@@ -641,7 +646,10 @@ function buildBranchCard(bid, b) {
     if (!best) { accMsg.textContent = 'หาตำแหน่งไม่ได้ ลองใหม่อีกครั้ง'; return; }
     f.lat.value = best.coords.latitude.toFixed(6); f.lng.value = best.coords.longitude.toFixed(6);
     draw(best.coords.latitude, best.coords.longitude); map.setView([best.coords.latitude, best.coords.longitude], 18); setDirty(true);
-    accMsg.textContent = `แม่นยำ ±${Math.round(best.coords.accuracy)} ม. (คอม PC มักไม่แม่น แนะนำเปิดหน้านี้จากมือถือตอนยืนในร้าน)`;
+    const acc = Math.round(best.coords.accuracy);
+    accMsg.textContent = acc > 15
+      ? `⚠ แม่นยำแค่ ±${acc} ม. — จุดอาจคลาด แนะนำคลิกบนแผนที่ดาวเทียมให้ตรงหน้าร้านแทน`
+      : `แม่นยำ ±${acc} ม. — ตรวจบนแผนที่ดาวเทียมว่าหมุดตรงหน้าร้าน ถ้าไม่ตรงลากหมุดได้`;
   });
 
   saveBtn.addEventListener('click', async () => {
