@@ -211,7 +211,7 @@ if (!CHECK && !ADMIN_SETUP) {
   $('setup').hidden = false;
   $('hdrSub').textContent = 'โหมดปักจุดร้าน (ใช้บน PC) — ไม่บันทึกข้อมูลขึ้นเซิร์ฟเวอร์';
   const KEY = 'gpsTest.setup.v2';
-  const S = Object.assign({ lat: 17.318126, lng: 99.832053, radius: 10, maxAccuracy: 20, graceFactor: 1.5 },
+  const S = Object.assign({ lat: 17.318062, lng: 99.832187, radius: 10, maxAccuracy: 20, graceFactor: 1.5 },
     (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (_) { return {}; } })());
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_) {} };
 
