@@ -171,7 +171,12 @@ const num = (v, d, lo, hi) => { const n = parseFloat(v); return isFinite(n) && n
 
 const q = new URLSearchParams(location.search);
 const ADMIN_SETUP = location.hash === '#admin-setup';
-const CHECK = q.has('lat') && q.has('lng') && !ADMIN_SETUP;
+const SETUP = location.hash === '#setup';               // โหมดปักจุดบน PC
+const CHECK = !ADMIN_SETUP && !SETUP;                    // ค่าเริ่มต้น: เช็กระยะ
+const HAS_PIN = q.has('lat') && q.has('lng');
+// จุดสาขาที่ใช้เมื่อเปิดหน้าโดยไม่มีพิกัดในลิงก์ (วัดจาก GPS หน้าร้านจริง 2026-10-25)
+const DEFAULT_BRANCH = { name: 'สาขาวงเวียน', lat: 17.318062, lng: 99.832187, r: 10, acc: 20, g: 1.5 };
+window.addEventListener('hashchange', () => location.reload());
 
 /* ----- super admin (ตัวล็อกของหน้าทดสอบ) -----
    ไม่เก็บรหัสผ่านในโค้ด เก็บแค่ "โค้ดล็อก" = PBKDF2-SHA256(ID + รหัสผ่าน) สร้างได้ที่ gps-test.html#admin-setup
@@ -207,7 +212,7 @@ if (ADMIN_SETUP) {
 }
 
 /* ======================= โหมดปักจุด ======================= */
-if (!CHECK && !ADMIN_SETUP) {
+if (SETUP) {
   $('setup').hidden = false;
   $('hdrSub').textContent = 'โหมดปักจุดร้าน (ใช้บน PC) — ไม่บันทึกข้อมูลขึ้นเซิร์ฟเวอร์';
   const KEY = 'gpsTest.setup.v2';
@@ -226,7 +231,7 @@ if (!CHECK && !ADMIN_SETUP) {
     grace.setLatLng([S.lat, S.lng]).setRadius(S.radius * S.graceFactor);
     $('rv').textContent = S.radius; $('coord').value = S.lat + ', ' + S.lng;
     const u = new URL(location.href.split('?')[0]);
-    u.search = new URLSearchParams({ lat: S.lat, lng: S.lng, r: S.radius, acc: S.maxAccuracy, g: S.graceFactor }).toString();
+    u.search = new URLSearchParams({ lat: S.lat, lng: S.lng, r: S.radius, acc: S.maxAccuracy, g: S.graceFactor }).toString(); u.hash = '';
     $('link').textContent = u.href; $('openLink').href = u.href;
     $('qr').replaceChildren();
     if (window.QRCode) new QRCode($('qr'), { text: u.href, width: 200, height: 200 });
@@ -255,16 +260,18 @@ if (!CHECK && !ADMIN_SETUP) {
 /* ======================= โหมดเช็กระยะ ======================= */
 if (CHECK) {
   $('check').hidden = false;
-  $('hdrSub').textContent = 'โหมดเช็กระยะ — จุดร้านถูกล็อกจากหน้าปักจุด';
+  $('hdrSub').textContent = 'โหมดเช็กระยะ — จุดร้านถูกล็อกไว้';
+  const P = HAS_PIN ? { lat: q.get('lat'), lng: q.get('lng'), r: q.get('r'), acc: q.get('acc'), g: q.get('g') } : DEFAULT_BRANCH;
   const B = {
-    lat: num(q.get('lat'), NaN, -90, 90), lng: num(q.get('lng'), NaN, -180, 180),
-    radius: num(q.get('r'), 10, 10, 300), maxAccuracy: num(q.get('acc'), 20, 5, 500), graceFactor: num(q.get('g'), 1.5, 1, 3)
+    name: HAS_PIN ? (q.get('name') || '') : DEFAULT_BRANCH.name,
+    lat: num(P.lat, NaN, -90, 90), lng: num(P.lng, NaN, -180, 180),
+    radius: num(P.r, 10, 10, 300), maxAccuracy: num(P.acc, 20, 5, 500), graceFactor: num(P.g, 1.5, 1, 3)
   };
   const LOGKEY = 'gpsTest.log.v2';
   let log = (() => { try { return JSON.parse(localStorage.getItem(LOGKEY)) || []; } catch (_) { return []; } })();
   const saveLog = () => { try { localStorage.setItem(LOGKEY, JSON.stringify(log)); } catch (_) {} };
 
-  const showLockInfo = () => $('lockInfo').textContent = `จุดร้าน ${B.lat}, ${B.lng} · รัศมี ${B.radius} ม. (ชายขอบถึง ${Math.round(B.radius * B.graceFactor)} ม.) · ยอมรับสัญญาณ ±${B.maxAccuracy} ม.`;
+  const showLockInfo = () => $('lockInfo').textContent = `${B.name ? B.name + ' · ' : ''}จุดร้าน ${B.lat}, ${B.lng} · รัศมี ${B.radius} ม. (ชายขอบถึง ${Math.round(B.radius * B.graceFactor)} ม.) · ยอมรับสัญญาณ ±${B.maxAccuracy} ม.`;
   showLockInfo();
 
   function evaluate(lat, lng, a) {
@@ -437,7 +444,7 @@ if (CHECK) {
     const h = readJ(HISTKEY, []);
     h.push({ t: Date.now(), by: adminBy || '-', from, to: B.lat + ', ' + B.lng, acc: candidate.acc, moved: candidate.moved || 0 });
     writeJ(HISTKEY, h.slice(-30)); renderPinHist();
-    const u = new URL(location.href); u.search = new URLSearchParams({ lat: B.lat, lng: B.lng, r: B.radius, acc: B.maxAccuracy, g: B.graceFactor }).toString(); u.hash = '';
+    const u = new URL(location.href); u.search = new URLSearchParams({ lat: B.lat, lng: B.lng, r: B.radius, acc: B.maxAccuracy, g: B.graceFactor, ...(B.name && { name: B.name }) }).toString(); u.hash = '';
     history.replaceState(null, '', u.href);
     $('linkNew').textContent = u.href; $('qrNew').replaceChildren();
     if (window.QRCode) new QRCode($('qrNew'), { text: u.href, width: 180, height: 180 });
