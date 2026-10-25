@@ -177,7 +177,7 @@ const CHECK = q.has('lat') && q.has('lng') && !ADMIN_SETUP;
    ไม่เก็บรหัสผ่านในโค้ด เก็บแค่ "โค้ดล็อก" = PBKDF2-SHA256(ID + รหัสผ่าน) สร้างได้ที่ gps-test.html#admin-setup
    หน้านี้เป็น static และ repo เป็น public จึงเป็นแค่ตัวกันย้ายจุดเล่น/พลาด ไม่ใช่ความปลอดภัยจริง
    ระบบจริง (clock-master.html) ตรวจสิทธิ์ด้วย Firebase Auth + Security Rules */
-const ADMIN_LOCK = '';   // เช่น 'v1:3f9a...'
+const ADMIN_LOCK = 'v1:903025544c0fb0600096ebfe6b0191ff11e1279e05376c1192052cddd5ff67eb';
 async function adminLock(id, pw) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(id.trim().toLowerCase() + '\u0000' + pw), 'PBKDF2', false, ['deriveBits']);
