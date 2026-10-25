@@ -81,6 +81,9 @@ tr.locked td{background:#f3f4f6;color:#6b7280}
 .editor{background:#f9fafb;border:1px solid #d1d5db}
 .struck input,.struck select{text-decoration:line-through;opacity:.55}
 .inl{padding:3px 5px}
+.warn{background:#fff7ed;color:#c2410c;font-weight:700}
+.rprow:hover{background:#f0fdf4}
+.rptotal td{background:#f3f4f6}
 .tcell{cursor:default}
 @media(max-width:900px){.rvwrap{grid-template-columns:1fr}#rvSide{position:static}}
 @media(max-width:700px){#app{flex-direction:column}#side{width:auto;flex-direction:row;flex-wrap:wrap}}
@@ -108,6 +111,7 @@ tr.locked td{background:#f3f4f6;color:#6b7280}
     <button class="tab on" data-tab="today">สถานะวันนี้</button>
     <button class="tab" data-tab="pending">รอตรวจ <span class="badge hidden" id="pendBadge">0</span></button>
     <button class="tab" data-tab="times">บันทึกเวลา</button>
+    <button class="tab" data-tab="report">รายงาน</button>
     <button class="tab" data-tab="staff">พนักงาน</button>
     <button class="tab" data-tab="branches">ตั้งค่าสาขา</button>
     <div class="sp"></div>
@@ -119,6 +123,7 @@ tr.locked td{background:#f3f4f6;color:#6b7280}
     <section id="p-today"></section>
     <section id="p-pending" class="hidden"></section>
     <section id="p-times" class="hidden"></section>
+    <section id="p-report" class="hidden"></section>
     <section id="p-staff" class="hidden"></section>
     <section id="p-branches" class="hidden"></section>
   </main>
@@ -145,7 +150,6 @@ const FIREBASE_CONFIG = {
 const EMU = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).get('emu') === '1';
 const CONFIG_MISSING = !EMU && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
 const IDLE_MS = 30 * 60 * 1000;
-const STALE_MS = 16 * 3600 * 1000;
 
 const $ = (s, r = document) => r.querySelector(s);
 /** สร้าง element ด้วย textContent เท่านั้น (ห้ามใช้ innerHTML กับข้อมูลจาก DB) */
@@ -162,6 +166,261 @@ function h(tag, attrs, ...kids) {
   return e;
 }
 const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+
+// ==== SHARED CORE v3 BEGIN — ต้องเหมือนกันทุกตัวอักษรใน clock.html และ clock-master.html (tests/core.test.mjs ตรวจ) ====
+// วิธีแก้: แก้ใน clock-master.html ก่อน คัดลอกทั้งบล็อกไป clock.html แล้วรัน cd tests && npm run test:core
+// ฟังก์ชันล้วน: ไม่อ้าง DOM / Firebase / Intl / ตัวแปรนอกบล็อก (ส่งค่าเข้ามาทาง ctx)
+const MIN_MS = 60000, DAY_MS = 86400000, BKK_OFFSET_MS = 25200000;
+const STALE_MS = 16 * 3600 * 1000;            // ค่าเดียวกับ 57600000 ใน database.rules.json
+const TYPE_ORDER = { in: 0, break_start: 1, break_end: 2, out: 3 };
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const isExcluded = (l) => !!l && (l.voided === true || l.review === 'rejected');
+const bkkDateOf = (ms) => new Date(ms + BKK_OFFSET_MS).toISOString().slice(0, 10);
+const hhmmOf = (ms) => new Date(ms + BKK_OFFSET_MS).toISOString().slice(11, 16);
+const tsOf = (d, hhmm, plusDay) => Date.parse(d + 'T' + hhmm + ':00+07:00') + (plusDay ? DAY_MS : 0);
+const addDaysKey = (d, n) => bkkDateOf(Date.parse(d + 'T12:00:00+07:00') + n * DAY_MS);
+const floorMin = (ts) => Math.floor(ts / MIN_MS);
+const logsToList = (obj) => Object.entries(obj || {}).filter(([, l]) => l && typeof l === 'object').map(([id, l]) => ({ ...l, id }))
+  .sort((a, b) => (a.ts || 0) - (b.ts || 0) || (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9));
+
+/** summarize v3: segment เริ่มด้วย in; ไม่นับ voided/rejected; ค่าระดับบนเท่า v2 (flags นับเฉพาะที่ยังไม่ตรวจ) */
+function summarize(logsObj) {
+  const ev = logsToList(logsObj).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+  const segments = [], flags = new Set(); let cur = null;
+  for (const e of ev) {
+    if (e.flag && !e.review) flags.add(e.flag);
+    if (e.type === 'in') { cur = { n: segments.length + 1, inTs: e.ts, inLog: e, outTs: null, outLog: null, breakMs: 0, breaks: [], openBreak: null, openBreakAtOut: false, orphanOut: false }; segments.push(cur); continue; }
+    if (!cur) continue;
+    if (e.type === 'break_start') { if (cur.openBreak == null) cur.openBreak = e.ts; }
+    else if (e.type === 'break_end') { if (cur.openBreak != null) { cur.breakMs += e.ts - cur.openBreak; cur.breaks.push([cur.openBreak, e.ts]); cur.openBreak = null; } }
+    else if (e.type === 'out') { if (cur.outTs != null) { cur.orphanOut = true; continue; } if (cur.openBreak != null) cur.openBreakAtOut = true; cur.outTs = e.ts; cur.outLog = e; }
+  }
+  const last = segments[segments.length - 1] || null;
+  const netMs = segments.filter((g) => g.outTs != null).reduce((a, g) => a + (g.outTs - g.inTs - g.breakMs), 0);
+  return { ev, segments, flags, inTs: segments[0] ? segments[0].inTs : null, outTs: last ? last.outTs : null, breakMs: segments.reduce((a, g) => a + g.breakMs, 0), openBreak: last ? last.openBreak : null, netMs };
+}
+
+/**
+ * สรุป 1 คน x 1 วันทำงาน (นาทีเต็มตามเวลาที่แสดง) ใช้ทุกหน้าจอ/รายงาน/CSV
+ * ctx = { shiftStart, shiftEnd, graceMin, homeBranchId, breakLimitFor(branchId), state, now }
+ */
+function dayReport(d, logsObj, ctx) {
+  const c = ctx || {};
+  const sum = summarize(logsObj);
+  const st = c.state || null;
+  const now = typeof c.now === 'number' ? c.now : 0;
+  const nSeg = sum.segments.length;
+  const segs = sum.segments.map((g, i) => {
+    const closed = g.outTs != null;
+    const breakMin = g.breaks.reduce((a, b) => a + (floorMin(b[1]) - floorMin(b[0])), 0);
+    let status = 'closed';
+    if (!closed) {
+      const live = i === nSeg - 1 && !!st && st.workDate === d && (st.status === 'working' || st.status === 'on_break') && typeof st.inAt === 'number' && now - st.inAt <= STALE_MS;
+      status = live ? 'live' : 'missing';
+    }
+    return {
+      n: g.n, inTs: g.inTs, outTs: g.outTs, inPlus: bkkDateOf(g.inTs) > d, outPlus: closed && bkkDateOf(g.outTs) > d,
+      breakMin, netMin: closed ? floorMin(g.outTs) - floorMin(g.inTs) - breakMin : null, status,
+      branchId: (g.inLog && g.inLog.branchId) || null, openBreakAtOut: g.openBreakAtOut, orphanOut: g.orphanOut
+    };
+  });
+  const closedSegs = segs.filter((g) => g.status === 'closed');
+  const netMin = closedSegs.reduce((a, g) => a + g.netMin, 0);
+  const breakMin = closedSegs.reduce((a, g) => a + g.breakMin, 0);
+  const breakMinAll = segs.reduce((a, g) => a + g.breakMin, 0);
+  const missing = segs.some((g) => g.status === 'missing'), live = segs.some((g) => g.status === 'live');
+  const openStatus = missing ? 'missing' : live ? 'live' : null;
+  const firstInTs = nSeg ? segs[0].inTs : null;
+  const lastOutTs = nSeg ? segs[nSeg - 1].outTs : null;
+  // มาสาย: นับจากเวลาเข้ากะ (ไม่หักผ่อนผัน) สายเมื่อเกินผ่อนผัน
+  const startOk = typeof c.shiftStart === 'string' && HHMM_RE.test(c.shiftStart);
+  const graceMin = typeof c.graceMin === 'number' ? c.graceMin : 5;
+  const lateRawMin = nSeg && startOk ? Math.floor((firstInTs - tsOf(d, c.shiftStart)) / MIN_MS) : null;
+  const isLate = lateRawMin != null && lateRawMin > graceMin;
+  // ออกก่อนเวลา: เฉพาะวันที่ครบ (ทุกกะมีเวลาออก) เทียบเวลาออกสุดท้ายกับเวลาเลิกกะ; เลิกกะน้อยกว่าเข้ากะ = ข้ามคืน (วันถัดไป)
+  const endStr = c.shiftEnd == null || c.shiftEnd === '' ? (startOk && c.shiftStart >= '18:00' ? null : '18:00') : c.shiftEnd;   // ค่าเริ่มต้น 18:00 ใช้เมื่อเข้ากะก่อน 18:00 เท่านั้น
+  const endOk = typeof endStr === 'string' && HHMM_RE.test(endStr);
+  const complete = nSeg > 0 && openStatus === null && lastOutTs != null;
+  const shiftEndTs = endOk ? tsOf(d, endStr, startOk && endStr < c.shiftStart) : null;
+  const earlyRawMin = complete && endOk ? floorMin(shiftEndTs) - floorMin(lastOutTs) : null;
+  const isEarly = earlyRawMin != null && earlyRawMin > 0;
+  // สาขา + พักเกิน (ต่อวัน: พักรวมทุกกะ > เวลาพักของสาขา)
+  const branchIds = [...new Set(sum.ev.map((l) => l.branchId).filter(Boolean))];
+  const branchId = (nSeg && segs[0].branchId) || c.homeBranchId || null;
+  const limRaw = typeof c.breakLimitFor === 'function' ? c.breakLimitFor(branchId) : null;
+  const lim = limRaw == null || limRaw === '' ? NaN : Number(limRaw);
+  const breakLimitMin = Number.isFinite(lim) ? lim : 60;
+  const isOverBreak = breakMinAll > breakLimitMin;
+  const all = Object.values(logsObj || {}).filter((l) => l && typeof l === 'object');
+  const anomalies = [];
+  if (segs.some((g) => g.openBreakAtOut)) anomalies.push('openBreakAtOut');
+  if (segs.some((g) => g.orphanOut)) anomalies.push('orphanOut');   // out ซ้ำในกะที่ปิดแล้ว: ไม่เปิดกะใหม่ ไม่นับ
+  if (segs.some((g) => g.netMin != null && g.netMin < 0)) anomalies.push('negativeNet');
+  if (segs.some((g) => g.status === 'closed' && floorMin(g.outTs) - floorMin(g.inTs) > 960)) anomalies.push('longShift');
+  return {
+    d, sum, segs, worked: nSeg > 0, firstInTs, lastOutTs, netMin, breakMin, breakMinAll,
+    closedCount: closedSegs.length, openStatus,
+    lateRawMin, isLate, lateMin: isLate ? lateRawMin : 0,
+    earlyRawMin, isEarly, earlyMin: isEarly ? earlyRawMin : (earlyRawMin != null ? 0 : null), shiftEndTs,
+    breakLimitMin, isOverBreak, overBreakMin: isOverBreak ? breakMinAll - breakLimitMin : 0,
+    branchId, branchIds, multiBranch: branchIds.length > 1,
+    flagsPending: sum.flags,
+    hasAdmin: sum.ev.some((l) => l.source === 'admin'), hasEdited: all.some((l) => l.origTs !== undefined), hasExcluded: all.some(isExcluded),
+    anomalies
+  };
+}
+// ==== SHARED CORE v3 END ====
+
+// ==== REPORT CORE BEGIN — ฟังก์ชันล้วน ใช้ต่อท้าย SHARED CORE v3 มีเฉพาะใน clock-master.html (tests/core.test.mjs ตรวจ) ====
+const MAX_RANGE_DAYS = 92;
+const WEEKDAY_TH = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+const weekdayTh = (d) => WEEKDAY_TH[new Date(Date.parse(d + 'T12:00:00+07:00')).getUTCDay()];
+/** 'YYYY-MM' -> { from, to } (วันแรก-วันสุดท้ายของเดือน เป็น key string ไม่พึ่ง timezone ของเครื่อง) */
+function monthRange(ym) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym));
+  if (!m || +m[2] < 1 || +m[2] > 12) return null;
+  const last = new Date(Date.UTC(+m[1], +m[2], 0)).getUTCDate();
+  return { from: m[1] + '-' + m[2] + '-01', to: m[1] + '-' + m[2] + '-' + String(last).padStart(2, '0') };
+}
+/** รายการวัน from..to (เก่า -> ใหม่); null ถ้าไม่ถูกรูปแบบ, to < from หรือเกิน max วัน */
+function datesBetween(from, to, max) {
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  if (!re.test(from) || !re.test(to) || to < from) return null;
+  const lim = max || MAX_RANGE_DAYS, out = [];
+  let d = from;
+  while (d <= to) { out.push(d); if (out.length > lim) return null; d = addDaysKey(d, 1); }
+  return out;
+}
+/** ข้อความใน CSV: กัน CSV injection ด้วย ' นำหน้าเมื่อขึ้นต้น = + - @ TAB CR แล้วครอบ "" เมื่อมี , " CR LF */
+function csvText(s) {
+  let t = String(s == null ? '' : s);
+  if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  if (/[",\r\n]/.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
+  return t;
+}
+/**
+ * รหัสพนักงาน (push id ขึ้นต้นด้วย '-' ซึ่ง Excel อาจตีเป็นสูตรแล้วขึ้น #NAME?) ใส่คำนำหน้า id: เสมอ (id:-OAa1)
+ * ไม่ใช้ ' นำหน้า (เห็นเป็นตัวอักษรเกิน) ไม่ใช้ ="..." (เป็นสูตรเอง) คำนำหน้าเป็นส่วนของรูปแบบรหัสที่ระบุใน README ใช้ join ข้ามไฟล์ได้
+ * รหัสที่ไม่ตรงรูปแบบ (ไม่ควรเกิด) ผ่าน csvText ตามปกติ
+ */
+const ID_RE = /^[-_A-Za-z0-9]{1,40}$/;
+function csvId(sid) { const t = String(sid == null ? '' : sid); return ID_RE.test(t) ? 'id:' + t : csvText(t); }
+/** ตัวเลขที่ระบบคำนวณ (ไม่ guard เพราะไม่ใช่ข้อความจากผู้ใช้): null/undefined/NaN = ช่องว่าง */
+function csvNum(n, digits) {
+  if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '';
+  return digits == null ? String(n) : n.toFixed(digits);
+}
+/** BOM + CRLF (มี CRLF ท้ายไฟล์) ไม่มีบรรทัด sep= */
+function toCsv(header, rows) {
+  return '\uFEFF' + [header, ...rows].map((r) => r.join(',')).join('\r\n') + '\r\n';
+}
+const minToHr = (m) => (m == null ? null : m / 60);
+
+/**
+ * สร้างรายงานช่วง from..to
+ * inp = { from, to, staff, branches, settings, state, logsFor(d), daysFor(d), sid, branch, inactive, onlyConfirmed, now }
+ * logsFor(d) -> { sid: { lid: log } } ; daysFor(d) -> { sid: { confirmed } }
+ */
+function buildReport(inp) {
+  const dates = datesBetween(inp.from, inp.to);
+  if (!dates) return { error: 'ช่วงวันที่ไม่ถูกต้อง หรือเกิน ' + MAX_RANGE_DAYS + ' วัน' };
+  const staff = inp.staff || {}, branches = inp.branches || {}, settings = inp.settings || {};
+  const g = Number(settings.lateGraceMin);
+  const graceMin = Number.isFinite(g) ? g : 5;
+  const rows = [];
+  for (const d of dates) {
+    const lg = (inp.logsFor && inp.logsFor(d)) || {}, dy = (inp.daysFor && inp.daysFor(d)) || {};
+    for (const sid of Object.keys(lg)) {
+      if (inp.sid && inp.sid !== 'all' && inp.sid !== sid) continue;
+      const s = staff[sid] || null;
+      if (s && s.active === false && !inp.inactive) continue;
+      const rep = dayReport(d, lg[sid], {
+        shiftStart: s && s.shiftStart, shiftEnd: s && s.shiftEnd, graceMin, homeBranchId: s && s.branchId,
+        breakLimitFor: (b) => (branches[b] || {}).breakLimitMin, state: (inp.state || {})[sid], now: inp.now
+      });
+      if (!rep.worked) continue;
+      if (inp.branch && inp.branch !== 'all' && rep.branchId !== inp.branch) continue;
+      const confirmed = !!(dy[sid] && dy[sid].confirmed === true);
+      if (inp.onlyConfirmed && !confirmed) continue;
+      rows.push({ d, sid, s, name: s ? s.nickname + (s.active === false ? ' (ปิดบัญชี)' : '') : '(ไม่พบในรายชื่อ) ' + sid, rep, confirmed });
+    }
+  }
+  const blank = (sid, s) => ({ sid, s, name: s ? s.nickname + (s.active === false ? ' (ปิดบัญชี)' : '') : '(ไม่พบในรายชื่อ) ' + sid, branchId: s ? s.branchId : null, days: 0, completeDays: 0, missingDays: 0, liveDays: 0, netMin: 0, breakMin: 0, lateCount: 0, lateMin: 0, overCount: 0, overMin: 0, earlyCount: 0, earlyMin: 0, unconfirmed: 0, pendingDays: 0 });
+  const map = new Map();
+  for (const [sid, s] of Object.entries(staff)) {
+    if (!s) continue;
+    if (inp.sid && inp.sid !== 'all' && inp.sid !== sid) continue;
+    if (s.active === false) continue;                      // คนปิดบัญชีแสดงเมื่อมีข้อมูลเท่านั้น
+    if (inp.branch && inp.branch !== 'all' && s.branchId !== inp.branch) continue;
+    map.set(sid, blank(sid, s));
+  }
+  for (const r of rows) {
+    if (!map.has(r.sid)) map.set(r.sid, blank(r.sid, r.s));
+    const p = map.get(r.sid), x = r.rep;
+    p.days++;
+    if (x.openStatus === null) p.completeDays++;
+    if (x.openStatus === 'missing') p.missingDays++;
+    if (x.openStatus === 'live') p.liveDays++;
+    p.netMin += x.netMin; p.breakMin += x.breakMin;
+    if (x.isLate) { p.lateCount++; p.lateMin += x.lateMin; }
+    if (x.isOverBreak) { p.overCount++; p.overMin += x.overBreakMin; }
+    if (x.isEarly) { p.earlyCount++; p.earlyMin += x.earlyMin; }
+    if (!r.confirmed) p.unconfirmed++;
+    if (x.flagsPending.size > 0) p.pendingDays++;
+  }
+  const people = [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  const totals = blank('', null); totals.name = 'รวม';
+  for (const p of people) for (const k of ['days', 'completeDays', 'missingDays', 'liveDays', 'netMin', 'breakMin', 'lateCount', 'lateMin', 'overCount', 'overMin', 'earlyCount', 'earlyMin', 'unconfirmed', 'pendingDays']) totals[k] += p[k];
+  rows.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : a.name.localeCompare(b.name, 'th')));
+  return {
+    from: inp.from, to: inp.to, dates, rows, people, totals,
+    warnings: { unconfirmed: totals.unconfirmed, missing: totals.missingDays, live: totals.liveDays, pending: totals.pendingDays }
+  };
+}
+
+const DAILY_HEAD = ['วันที่', 'วัน', 'ชื่อ', 'สาขา', 'กะที่', 'เข้า', 'ออก', 'ออกวันถัดไป', 'พักรวม (นาที)', 'สุทธิ (นาที)', 'สุทธิ (ชม.)', 'สาย (นาที)', 'พักเกิน (นาที)', 'ออกก่อนเวลา (นาที)', 'สถานะกะ', 'ยืนยันวัน', 'หมายเหตุ', 'รหัสพนักงาน'];
+const SUMMARY_HEAD = ['ชื่อ', 'สาขาหลัก', 'จากวันที่', 'ถึงวันที่', 'วันทำงาน', 'วันครบ', 'ไม่มีเวลาออก (วัน)', 'สุทธิ (นาที)', 'สุทธิ (ชม.)', 'พักรวม (นาที)', 'มาสาย (ครั้ง)', 'มาสาย (นาที)', 'พักเกิน (ครั้ง)', 'พักเกิน (นาที)', 'ออกก่อนเวลา (ครั้ง)', 'ออกก่อนเวลา (นาที)', 'ยังไม่ยืนยัน (วัน)', 'รหัสพนักงาน'];
+const SEG_STATUS_TH = { closed: 'ปกติ', missing: 'ไม่มีเวลาออก', live: 'กำลังทำงาน' };
+/** ป้ายหมายเหตุของวัน (ใช้ทั้ง CSV และหน้าจอ) */
+function remarksOf(rep) {
+  const t = [];
+  if (rep.hasAdmin) t.push('แอดมินบันทึก');
+  if (rep.hasEdited) t.push('แก้เวลาแล้ว');
+  if (rep.hasExcluded) t.push('มีรายการไม่นับ');
+  if (rep.multiBranch) t.push('หลายสาขา');
+  if (rep.anomalies.includes('openBreakAtOut')) t.push('พักไม่มีเวลากลับ');
+  if (rep.anomalies.includes('orphanOut')) t.push('out ซ้ำไม่นับ');
+  if (rep.flagsPending.size > 0) t.push('รอตรวจ');
+  return t;
+}
+/** CSV รายวัน 1 แถวต่อกะ; branchNameOf(bid) -> ชื่อสาขา */
+function dailyCsv(report, branchNameOf) {
+  const out = [];
+  for (const r of report.rows) {
+    const x = r.rep, nSeg = x.segs.length;
+    x.segs.forEach((g, i) => {
+      out.push([
+        r.d, weekdayTh(r.d), csvText(r.name), csvText(branchNameOf ? branchNameOf(x.branchId) : x.branchId), String(g.n), hhmmOf(g.inTs), g.outTs == null ? '' : hhmmOf(g.outTs),
+        g.outTs == null ? '' : g.outPlus ? '1' : '0', g.status === 'closed' ? csvNum(g.breakMin) : '', csvNum(g.netMin), csvNum(minToHr(g.netMin), 2),
+        i === 0 ? csvNum(x.lateRawMin == null ? null : x.lateMin) : '', i === 0 ? csvNum(x.overBreakMin) : '',
+        i === nSeg - 1 ? csvNum(x.earlyMin) : '',
+        SEG_STATUS_TH[g.status], r.confirmed ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน', csvText(remarksOf(x).join(' / ')), csvId(r.sid)
+      ]);
+    });
+  }
+  return toCsv(DAILY_HEAD, out);
+}
+/** CSV สรุปตามคน + แถวรวม */
+function summaryCsv(report, branchNameOf) {
+  const line = (p, isTotal) => [
+    isTotal ? 'รวม' : csvText(p.name), isTotal ? '' : csvText(branchNameOf ? branchNameOf(p.branchId) : p.branchId), report.from, report.to,
+    csvNum(p.days), csvNum(p.completeDays), csvNum(p.missingDays), csvNum(p.netMin), csvNum(minToHr(p.netMin), 2), csvNum(p.breakMin),
+    csvNum(p.lateCount), csvNum(p.lateMin), csvNum(p.overCount), csvNum(p.overMin), csvNum(p.earlyCount), csvNum(p.earlyMin), csvNum(p.unconfirmed),
+    isTotal ? '' : csvId(p.sid)
+  ];
+  return toCsv(SUMMARY_HEAD, [...report.people.map((p) => line(p, false)), line(report.totals, true)]);
+}
+// ==== REPORT CORE END ====
 
 if (CONFIG_MISSING) {
   $('#login').classList.remove('hidden');
@@ -243,7 +502,7 @@ function teardown() {
   for (const k of Object.keys(D)) D[k] = (k === 'logsWin') ? {} : null;
   winKey = ''; selectedKey = null;
   T.ed = null; T.inline = null; T.sel = new Set(); T.cache = { logs: {}, days: {} };
-  for (const id of ['p-today', 'p-pending', 'p-times', 'p-staff', 'p-branches']) clear($('#' + id));
+  for (const id of ['p-today', 'p-pending', 'p-times', 'p-report', 'p-staff', 'p-branches']) clear($('#' + id));
   destroyMaps();
   closeModal();
   $('#who').textContent = '';
@@ -291,7 +550,7 @@ setInterval(() => {
 }, 30000);
 
 /* ====== ข้อมูลสด ====== */
-const D = { branches: null, settings: null, staff: null, state: null, secret: null, requests: null, logsWin: {}, days: null, corrPending: null, calLast: null };
+const D = { branches: null, settings: null, staff: null, state: null, secret: null, requests: null, logsWin: {}, days: null, corrPending: null, calLast: null, logsReady: false };
 
 function listen(path, key) {
   unsubs.push(onValue(A(path), (s) => { D[key] = s.val() || {}; refresh(); }, (e) => console.warn('listen', path, e.code)));
@@ -305,8 +564,8 @@ function listenWindow() {
   if (from === winKey) return;
   winKey = from;
   winUnsubs.forEach((u) => u()); winUnsubs = [];
-  D.logsWin = {}; D.days = null;
-  winUnsubs.push(onValue(query(A('logs'), orderByKey(), startAt(from)), (s) => { D.logsWin = s.val() || {}; refresh(); }, (e) => console.warn('logs', e.code)));
+  D.logsWin = {}; D.days = null; D.logsReady = false;
+  winUnsubs.push(onValue(query(A('logs'), orderByKey(), startAt(from)), (s) => { D.logsWin = s.val() || {}; D.logsReady = true; refresh(); }, (e) => console.warn('logs', e.code)));
   winUnsubs.push(onValue(query(A('days'), orderByKey(), startAt(from)), (s) => { D.days = s.val() || {}; refresh(); }, (e) => console.warn('days', e.code)));
 }
 
@@ -323,7 +582,7 @@ function startApp() {
   showTab(curTab);
 }
 
-const TABS = ['today', 'pending', 'times', 'staff', 'branches'];
+const TABS = ['today', 'pending', 'times', 'report', 'staff', 'branches'];
 let curTab = 'today';
 function showTab(t) {
   curTab = t;
@@ -348,6 +607,7 @@ function refresh() {
     if (curTab === 'today') renderToday();
     else if (curTab === 'pending') renderPending();
     else if (curTab === 'times') renderTimes();
+    else if (curTab === 'report') renderReport();
     else if (curTab === 'staff') renderStaff();
     else if (curTab === 'branches') renderBranches();
   });
@@ -357,38 +617,13 @@ function refresh() {
 const GRACE_MS = 15 * 60000;                       // ผ่อนผันเที่ยงคืน
 const LONG_SHIFT_MS = 16 * 3600000;
 const TYPE_TH = { in: 'เข้างาน', break_start: 'เริ่มพัก', break_end: 'กลับจากพัก', out: 'ออกงาน' };
-const TYPE_ORDER = { in: 0, break_start: 1, break_end: 2, out: 3 };
 const NEXT = { in: 'working', break_start: 'on_break', break_end: 'working', out: 'done' };
-/** เวลาไทย +07:00 ตายตัว ไม่ขึ้นกับ timezone ของ PC */
-const tsOf = (d, hhmm, plusDay) => Date.parse(d + 'T' + hhmm + ':00+07:00') + (plusDay ? 86400000 : 0);
 const midnightAfter = (d) => Date.parse(d + 'T00:00:00+07:00') + 86400000;
 const plusDayOf = (d, ts) => bangkokDate(ts) > d;
-/** รายการที่ไม่นับ: ยกเลิก (voided) หรือกด ✘ ไม่ยืนยัน (rejected) */
-const isExcluded = (l) => !!l && (l.voided === true || l.review === 'rejected');
 const dayLabelF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'short', day: 'numeric', month: 'short' });
 const dayLabel = (d) => dayLabelF.format(Date.parse(d + 'T12:00:00+07:00'));
 /** เวลา HH:MM ของ ts + (+1) ถ้าข้ามวันของวันทำงาน d */
 const fmtT = (ts, d) => fmtTime(ts) + (d && plusDayOf(d, ts) ? ' (+1)' : '');
-const logsToList = (obj) => Object.entries(obj || {}).filter(([, l]) => l && typeof l === 'object').map(([id, l]) => ({ ...l, id }))
-  .sort((a, b) => (a.ts || 0) - (b.ts || 0) || (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9));
-
-/** summarize v2: segment เริ่มด้วย in; ค่า inTs/outTs/breakMs/openBreak เท่าเดิมในกรณี 1 กะ/วัน (flags นับเฉพาะที่ยังไม่ตรวจ) */
-function summarize(logsObj) {
-  const ev = logsToList(logsObj).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
-  const segments = [], flags = new Set(); let cur = null;
-  for (const e of ev) {
-    if (e.flag && !e.review) flags.add(e.flag);
-    if (e.type === 'in') { cur = { inTs: e.ts, inLog: e, outTs: null, outLog: null, breakMs: 0, openBreak: null }; segments.push(cur); continue; }
-    if (!cur) continue;
-    if (e.type === 'break_start') { if (cur.openBreak == null) cur.openBreak = e.ts; }
-    else if (e.type === 'break_end') { if (cur.openBreak != null) { cur.breakMs += e.ts - cur.openBreak; cur.openBreak = null; } }
-    else if (e.type === 'out') { cur.outTs = e.ts; cur.outLog = e; }
-  }
-  const last = segments[segments.length - 1] || null;
-  const netMs = segments.filter((g) => g.outTs != null).reduce((a, g) => a + (g.outTs - g.inTs - g.breakMs), 0);
-  return { ev, segments, flags, inTs: segments[0] ? segments[0].inTs : null, outTs: last ? last.outTs : null, breakMs: segments.reduce((a, g) => a + g.breakMs, 0), openBreak: last ? last.openBreak : null, netMs };
-}
-
 /** กะที่วันทำงาน d "ไม่ตรงกับเวลาจริง" ของ in หรือไม่ (วันอนาคต / คนละวันเกินผ่อนผัน 15 นาทีหลังเที่ยงคืน) ถ้า in ถูกยืนยันแล้วไม่ติดธง */
 function dateMismatch(d, inLog, now) {
   if (inLog && inLog.review === 'approved') return false;
@@ -672,9 +907,17 @@ function bestEffortAudit(updates, path, before, after, op) {
 }
 
 /* ====== 1. สถานะวันนี้ ====== */
+/** ctx ของ dayReport จากข้อมูลสดของ master (ค่าปัจจุบันของ shiftStart/shiftEnd/breakLimitMin/lateGraceMin ใช้กับทุกวัน) */
+function ctxFor(sid, s, now) {
+  const g = Number((D.settings || {}).lateGraceMin);
+  return {
+    shiftStart: s && s.shiftStart, shiftEnd: s && s.shiftEnd, graceMin: Number.isFinite(g) ? g : 5, homeBranchId: s && s.branchId,
+    breakLimitFor: (b) => ((D.branches || {})[b] || {}).breakLimitMin, state: (D.state || {})[sid], now: now ?? serverNow()
+  };
+}
+
 function personStatus(sid, s, today, now) {
   const st = (D.state || {})[sid];
-  const grace = Number((D.settings || {}).lateGraceMin ?? 5);
   const out = { cls: 's-none', text: 'ยังไม่มา', tags: [], branchId: s.branchId, late: false };
   if (!st || !st.workDate) return out;
   const live = st.status === 'working' || st.status === 'on_break';
@@ -688,11 +931,8 @@ function personStatus(sid, s, today, now) {
   if (st.lastBranchId) out.branchId = st.lastBranchId;
   const brk = (seg ? seg.breakMs : 0) + (seg && seg.openBreak != null ? now - seg.openBreak : 0);
   const lim = Number(((D.branches || {})[out.branchId] || {}).breakLimitMin ?? 60) * 60000;
-  if (sum.inTs != null && s.shiftStart) {
-    const shiftMs = Date.parse(`${st.workDate}T${s.shiftStart}:00+07:00`);
-    const lateMin = Math.floor((sum.inTs - shiftMs) / 60000);
-    if (lateMin > grace) { out.late = true; out.tags.push({ t: `สาย ${lateMin} นาที`, c: 'late' }); }
-  }
+  const rep = dayReport(st.workDate, ((D.logsWin || {})[st.workDate] || {})[sid], ctxFor(sid, s, now));
+  if (rep.isLate) { out.late = true; out.tags.push({ t: `สาย ${rep.lateMin} นาที`, c: 'late' }); }
   // เตือนเมื่อวันทำงานไม่ตรงกับเวลาจริงของ in (หายเมื่อเจ้าของกด ✔ ยืนยัน) หรือ state ไม่มี log รองรับ
   if (dateMismatch(st.workDate, sum.segments[0] ? sum.segments[0].inLog : null, now) || (live && !stale && !sum.ev.length)) out.tags.push({ t: 'วันทำงานไม่ตรงกับเวลาจริง ตรวจสอบ', c: 'bad' });
   if (sum.flags.has('suspect')) out.tags.push({ t: 'น่าสงสัย', c: 'bad' });
@@ -701,7 +941,7 @@ function personStatus(sid, s, today, now) {
   else if (st.status === 'working') { out.cls = 's-work'; out.text = 'ทำงาน ตั้งแต่ ' + fmtTime(seg ? seg.inTs : st.inAt); if (seg && seg.breakMs) out.text += ' · พักไปแล้ว ' + fmtMin(seg.breakMs / 60000); }
   else if (st.status === 'on_break') { out.cls = 's-break' + (brk > lim ? ' over' : ''); out.text = 'พักอยู่ ' + fmtClock(now - ((seg && seg.openBreak) ?? now)) + ' (รวม ' + fmtMin(brk / 60000) + ')'; }
   else if (st.status === 'done' && seg && seg.outTs != null) {
-    out.cls = 's-done'; out.text = `ออกแล้ว${prevShiftDone ? ' (กะเมื่อวาน)' : ''} ${fmtTime(seg.outTs)} · สุทธิ ${fmtMin((seg.outTs - seg.inTs - seg.breakMs) / 60000)}`;
+    out.cls = 's-done'; out.text = `ออกแล้ว${prevShiftDone ? ' (กะเมื่อวาน)' : ''} ${fmtTime(seg.outTs)} · สุทธิ ${fmtMin(rep.netMin)}`;
   } else if (st.status === 'done') { out.cls = 's-done'; out.text = 'ออกแล้ว'; }
   return out;
 }
@@ -760,7 +1000,7 @@ function renderCalWarn() {
 }
 
 /* ====== 2. บันทึกเวลา ====== */
-const T = { mode: 'day', day: '', from: '', to: '', sid: 'all', inactive: false, branch: 'all', onlyUnconf: false, sel: new Set(), ed: null, inline: null, cache: { logs: {}, days: {} }, fetching: new Set() };
+const T = { mode: 'day', day: '', from: '', to: '', sid: 'all', inactive: false, branch: 'all', onlyUnconf: false, sel: new Set(), ed: null, inline: null, cache: { logs: {}, days: {} }, fetching: new Set(), failed: new Set(), rangeErr: null };
 const rowKey = (d, sid) => d + '|' + sid;
 const addDays = (d, n) => bangkokDate(Date.parse(d + 'T12:00:00+07:00') + n * 86400000);
 function datesInRange() {
@@ -776,15 +1016,7 @@ function datesInRange() {
 /** logs/days ของวัน d : อยู่ในหน้าต่างใช้ listener; เก่ากว่านั้นอ่านครั้งเดียวแล้วเก็บ cache (null = กำลังโหลด) */
 const logsFor = (d) => (D.logsWin[d] ? D.logsWin[d] : d < winKey ? (T.cache.logs[d] ?? null) : {});
 const daysFor = (d) => (D.days && D.days[d] ? D.days[d] : d < winKey ? (T.cache.days[d] ?? null) : {});
-function ensureCache(dates) {
-  for (const d of dates) {
-    if (d >= winKey || T.fetching.has(d) || (T.cache.logs[d] !== undefined && T.cache.days[d] !== undefined)) continue;
-    T.fetching.add(d);
-    Promise.all([get(A('logs/' + d)), get(A('days/' + d))]).then(([l, dy]) => { T.cache.logs[d] = l.val() || {}; T.cache.days[d] = dy.val() || {}; })
-      .catch(() => { T.cache.logs[d] = {}; T.cache.days[d] = {}; })
-      .finally(() => { T.fetching.delete(d); if (curTab === 'times') renderTimes(); });
-  }
-}
+function ensureCache(dates) { ensureRange(dates); }
 function breakPairs(ev) {
   const out = []; let open = null;
   for (const e of ev) {
@@ -812,7 +1044,7 @@ function timesRows() {
       if (T.branch !== 'all' && T.branch !== branchId) continue;
       const day = dy[sid] || null;
       if (T.onlyUnconf && day && day.confirmed === true) continue;
-      rows.push({ d, sid, s, raw, sum, day, branchId });
+      rows.push({ d, sid, s, raw, sum, day, branchId, rep: dayReport(d, raw, ctxFor(sid, s)) });
     }
   }
   rows.sort((a, b) => (a.d < b.d ? 1 : a.d > b.d ? -1 : (a.s.nickname || '').localeCompare(b.s.nickname || '', 'th')));
@@ -820,12 +1052,13 @@ function timesRows() {
 }
 function tagsFor(r) {
   const tags = [], now = serverNow();
-  const grace = Number((D.settings || {}).lateGraceMin ?? 5);
   const first = r.sum.segments[0];
-  if (first && r.s.shiftStart) {
-    const lateMin = Math.floor((first.inTs - Date.parse(`${r.d}T${r.s.shiftStart}:00+07:00`)) / 60000);
-    if (lateMin > grace) tags.push({ t: `สาย ${lateMin} นาที`, c: 'late' });
-  }
+  if (r.rep.isLate) tags.push({ t: `สาย ${r.rep.lateMin} นาที`, c: 'late' });
+  if (r.rep.isEarly) tags.push({ t: `ออกก่อนเวลา ${r.rep.earlyMin} นาที`, c: 'late' });
+  if (r.rep.isOverBreak) tags.push({ t: `พักเกิน ${r.rep.overBreakMin} นาที`, c: 'late' });
+  if (r.rep.multiBranch) tags.push({ t: 'หลายสาขา', c: '' });
+  if (r.rep.anomalies.includes('openBreakAtOut')) tags.push({ t: 'พักไม่มีเวลากลับ', c: 'bad' });
+  if (r.rep.anomalies.includes('orphanOut')) tags.push({ t: 'out ซ้ำ (ไม่นับ)', c: 'bad' });
   if (r.sum.flags.has('suspect')) tags.push({ t: 'น่าสงสัย', c: 'bad' });
   else if (r.sum.flags.has('borderline')) tags.push({ t: 'ใกล้ขอบเขต', c: 'late' });
   if (first && dateMismatch(r.d, first.inLog, now)) tags.push({ t: 'วันไม่ตรง', c: 'bad' });
@@ -910,8 +1143,8 @@ function renderTimes(force) {
       h('td', null, (D.branches[r.branchId] || {}).name || r.branchId || ''),
       timeCell('in', first ? first.inTs : null), h('td', null, brkTxt || '—'),
       timeCell('out', last ? last.outTs : null),
-      h('td', null, r.sum.breakMs ? fmtMin(r.sum.breakMs / 60000) : '—'),
-      h('td', null, segs.some((g) => g.outTs != null) ? fmtMin(r.sum.netMs / 60000) : '—'),
+      h('td', { class: 'c-brk' }, r.rep.breakMinAll ? fmtMin(r.rep.breakMinAll) : '—'),
+      h('td', { class: 'c-net' }, r.rep.closedCount ? fmtMin(r.rep.netMin) : '—'),
       h('td', null, tagsFor(r).map((t) => h('span', { class: 'tag ' + t.c }, t.t))),
       h('td', { class: 'dstat' }, dayTxt),
       h('td', null, h('div', { class: 'row', style: 'margin:0;gap:4px' },
@@ -1636,6 +1869,178 @@ async function toggleCalEnforce(chk) {
   catch (e) { chk.checked = !want; toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
 }
 
+/* ====== 4. รายงาน (เฟส 3) ====== */
+const R = { mode: 'month', month: '', from: '', to: '', sid: 'all', branch: 'all', inactive: true, onlyConfirmed: false, view: 'summary' };
+
+/** อ่าน logs/days ช่วงเก่ากว่าหน้าต่าง reviewDays แบบ range query ครั้งเดียวอย่างละ 1 query แล้วเก็บ T.cache (ทั้งช่วง วันว่างเก็บ {}) */
+function fetchRange(from, to) {
+  const key = from + '..' + to;
+  if (T.fetching.has(key) || T.failed.has(key)) return;
+  T.fetching.add(key);
+  Promise.all([get(query(A('logs'), orderByKey(), startAt(from), endAt(to))), get(query(A('days'), orderByKey(), startAt(from), endAt(to)))])
+    .then(([l, dy]) => {
+      const lv = l.val() || {}, dv = dy.val() || {};
+      for (const d of datesBetween(from, to, 400) || []) { T.cache.logs[d] = lv[d] || {}; T.cache.days[d] = dv[d] || {}; }
+    })
+    .catch((e) => { T.failed.add(key); T.rangeErr = e.code || e.message; })
+    .finally(() => { T.fetching.delete(key); if (curTab === 'times') renderTimes(); else if (curTab === 'report') renderReport(); });
+}
+/** วันที่เก่ากว่า winKey ที่ยังไม่มีใน cache -> ยิง range query ครั้งเดียวครอบทั้งช่วง; คืนจำนวนวันที่ยังรอ */
+function ensureRange(dates) {
+  const need = dates.filter((d) => d < winKey && (T.cache.logs[d] === undefined || T.cache.days[d] === undefined)).sort();
+  if (need.length) fetchRange(need[0], need[need.length - 1]);
+  return need.length;
+}
+
+function reportRange() {
+  const today = bangkokDate(serverNow());
+  if (!R.month) R.month = today.slice(0, 7);
+  if (!R.to) R.to = today;
+  if (!R.from) R.from = addDaysKey(today, -29);
+  return R.mode === 'month' ? monthRange(R.month) : { from: R.from, to: R.to };
+}
+function reportData() {
+  const rg = reportRange();
+  const dates = rg && datesBetween(rg.from, rg.to);
+  if (!dates) return { error: 'เลือกช่วงวันที่ให้ถูกต้อง (ไม่เกิน ' + MAX_RANGE_DAYS + ' วัน)' };
+  const pending = ensureRange(dates);
+  if (pending && T.rangeErr && [...T.failed].length) return { error: 'อ่านข้อมูลย้อนหลังไม่สำเร็จ: ' + T.rangeErr, retry: true };
+  const report = buildReport({
+    from: rg.from, to: rg.to, staff: D.staff, branches: D.branches, settings: D.settings, state: D.state,
+    logsFor: (d) => logsFor(d) || {}, daysFor: (d) => daysFor(d) || {}, sid: R.sid, branch: R.branch, inactive: R.inactive, onlyConfirmed: R.onlyConfirmed, now: serverNow()
+  });
+  return { report, loading: pending > 0, rg };
+}
+const fmtNet = (m) => fmtMin(m);
+const branchNameOf = (b) => ((D.branches || {})[b] || {}).name || b || '';
+
+function renderReport() {
+  const root = $('#p-report');
+  if (!D.staff || !D.branches || !D.state || D.days === null || !D.settings) return;
+  const data = reportData();
+  if (data.report && !D.logsReady) data.loading = true;
+  clear(root);
+  root.append(h('h3', null, 'รายงาน'));
+  // ----- ตัวกรอง -----
+  const mode = h('select', { id: 'rpMode' }, h('option', { value: 'month' }, 'เดือน'), h('option', { value: 'range' }, 'ช่วงวัน')); mode.value = R.mode;
+  const month = h('input', { type: 'month', id: 'rpMonth', '.value': R.month });
+  const from = h('input', { type: 'date', id: 'rpFrom', '.value': R.from }), to = h('input', { type: 'date', id: 'rpTo', '.value': R.to });
+  const sidSel = h('select', { id: 'rpStaff' }, h('option', { value: 'all' }, 'ทุกคน'),
+    Object.entries(D.staff).filter(([, s]) => s).sort((a, b) => (a[1].nickname || '').localeCompare(b[1].nickname || '', 'th')).map(([sid, s]) => h('option', { value: sid }, s.nickname + (s.active === false ? ' (ปิดบัญชี)' : ''))));
+  sidSel.value = R.sid;
+  const brSel = h('select', { id: 'rpBranch' }, h('option', { value: 'all' }, 'ทุกสาขา'), Object.entries(D.branches).map(([bid, b]) => h('option', { value: bid }, b.name || bid))); brSel.value = R.branch;
+  const inact = h('input', { type: 'checkbox', id: 'rpInactive', '.checked': R.inactive });
+  const only = h('input', { type: 'checkbox', id: 'rpOnly', '.checked': R.onlyConfirmed });
+  const apply = () => { R.mode = mode.value; R.month = month.value || R.month; R.from = from.value || R.from; R.to = to.value || R.to; R.sid = sidSel.value; R.branch = brSel.value; R.inactive = inact.checked; R.onlyConfirmed = only.checked; renderReport(); };
+  for (const e of [mode, month, from, to, sidSel, brSel, inact, only]) e.addEventListener('change', apply);
+  const today = bangkokDate(serverNow());
+  const quick = (id, label, fn) => h('button', { class: 'btn small gray', type: 'button', id, onclick: () => { fn(); renderReport(); } }, label);
+  const view = (v, label) => h('button', { class: 'btn small ' + (R.view === v ? 'blue' : 'gray'), id: v === 'summary' ? 'rpViewSummary' : 'rpViewDaily', type: 'button', onclick: () => { R.view = v; renderReport(); } }, label);
+  const busy = !data.report || data.loading || !D.logsReady;
+  root.append(h('div', { class: 'card' },
+    h('div', { class: 'row' }, h('label', null, 'ช่วง', mode),
+      R.mode === 'month' ? h('label', null, 'เดือน', month) : [h('label', null, 'จาก', from), h('label', null, 'ถึง (ไม่เกิน 92 วัน)', to)],
+      h('label', null, 'พนักงาน', sidSel), h('label', null, 'สาขา', brSel),
+      h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, inact, 'รวมคนที่ปิดบัญชี'),
+      h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, only, 'เฉพาะวันที่ยืนยันแล้ว')),
+    h('div', { class: 'row' },
+      quick('rpThisMonth', 'เดือนนี้', () => { R.mode = 'month'; R.month = today.slice(0, 7); }),
+      quick('rpPrevMonth', 'เดือนก่อน', () => { R.mode = 'month'; R.month = addDaysKey(today.slice(0, 7) + '-01', -1).slice(0, 7); }),
+      quick('rp7', '7 วัน', () => { R.mode = 'range'; R.from = addDaysKey(today, -6); R.to = today; }),
+      quick('rp30', '30 วัน', () => { R.mode = 'range'; R.from = addDaysKey(today, -29); R.to = today; }),
+      h('span', { class: 'muted' }, 'มุมมอง'), view('summary', 'สรุปตามคน'), view('daily', 'รายวัน'),
+      h('button', { class: 'btn small', id: 'rpCsvDaily', disabled: busy, onclick: () => exportCsv('daily') }, 'ส่งออก CSV รายวัน'),
+      h('button', { class: 'btn small', id: 'rpCsvSummary', disabled: busy, onclick: () => exportCsv('summary') }, 'ส่งออก CSV สรุป'),
+      h('button', { class: 'btn small gray', id: 'rpReload', onclick: reloadReport }, 'โหลดใหม่'))));
+  if (data.error) {
+    root.append(h('div', { class: 'card err', id: 'rpError' }, data.error));
+    return;
+  }
+  const rp = data.report;
+  if (rp.error) { root.append(h('div', { class: 'card err', id: 'rpError' }, rp.error)); return; }
+  // ----- แถบเตือน -----
+  const w = rp.warnings, now = serverNow();
+  const corrN = Object.values(D.corrPending || {}).filter((c) => c && c.workDate >= rp.from && c.workDate <= rp.to && (R.sid === 'all' || c.staffId === R.sid)).length;
+  const mismatchN = rp.rows.filter((r) => dateMismatch(r.d, r.rep.sum.segments[0] ? r.rep.sum.segments[0].inLog : null, now)).length;
+  const bar = (id, text, link) => h('div', { class: 'notice rpwarn', id }, text, link && [' ', link]);
+  if (data.loading) root.append(bar('rpLoading', 'กำลังโหลดข้อมูลย้อนหลัง...'));
+  if (w.unconfirmed) root.append(bar('rpWUnconf', `ยังไม่ยืนยัน ${w.unconfirmed} วัน — ตัวเลขอาจเปลี่ยน`, h('a', { href: '#', onclick: (e) => { e.preventDefault(); gotoTimesRange(rp.from, rp.to); } }, 'ดูในบันทึกเวลา')));
+  if (w.missing) root.append(bar('rpWMissing', `ไม่มีเวลาออก ${w.missing} วัน (ไม่นับชั่วโมง)`));
+  if (w.pending) root.append(bar('rpWPending', `มีรายการรอตรวจ ${w.pending} วัน`));
+  if (corrN) root.append(bar('rpWCorr', `คำขอแก้เวลารอ ${corrN} รายการ`));
+  if (mismatchN) root.append(bar('rpWMismatch', `วันไม่ตรง ${mismatchN} วัน — ย้ายกะในแท็บรอตรวจก่อนสรุป`));
+  // ----- ตาราง -----
+  root.append(h('div', { class: 'muted', id: 'rpRange' }, `${rp.from} ถึง ${rp.to} · ${rp.dates.length} วัน`));
+  if (R.view === 'summary') root.append(summaryTable(rp)); else root.append(dailyTable(rp));
+  const g = Number((D.settings || {}).lateGraceMin);
+  root.append(h('p', { class: 'muted' }, `คิดสายจากเวลาเข้ากะปัจจุบัน (ผ่อนผัน ${Number.isFinite(g) ? g : 5} นาที) · ออกก่อนเวลาเทียบเวลาเลิกกะปัจจุบัน เฉพาะวันที่มีเวลาออกครบ · พักเกินเทียบเวลาพักของสาขาปัจจุบัน · นับเวลาเป็นนาทีเต็ม · กะข้ามคืนนับในวันที่เริ่มกะ`));
+}
+const wrapCls = (n) => (n > 0 ? 'warn' : '');
+function summaryTable(rp) {
+  const tb = h('tbody');
+  const row = (p, total) => h('tr', { class: total ? 'rptotal' : 'rprow', 'data-sid': p.sid || '', onclick: total ? null : () => { R.sid = p.sid; R.view = 'daily'; renderReport(); }, style: total ? 'font-weight:700' : 'cursor:pointer' },
+    h('td', null, total ? 'รวม' : p.name), h('td', null, total ? '' : branchNameOf(p.branchId)),
+    h('td', { class: 'n-days' }, String(p.days)),
+    h('td', { class: 'n-ok ' + wrapCls(p.missingDays) }, `${p.completeDays} / ${p.missingDays}` + (p.liveDays ? ` (+${p.liveDays} กำลังทำงาน)` : '')),
+    h('td', { class: 'n-net' }, fmtNet(p.netMin)), h('td', { class: 'n-brk' }, fmtNet(p.breakMin)),
+    h('td', { class: 'n-late' }, `${p.lateCount} ครั้ง · ${p.lateMin} นาที`), h('td', { class: 'n-over' }, `${p.overCount} ครั้ง · ${p.overMin} นาที`),
+    h('td', { class: 'n-early' }, `${p.earlyCount} ครั้ง · ${p.earlyMin} นาที`),
+    h('td', { class: 'n-unconf ' + wrapCls(p.unconfirmed) }, String(p.unconfirmed)));
+  for (const p of rp.people) tb.append(row(p, false));
+  tb.append(row(rp.totals, true));
+  return h('div', { style: 'overflow:auto' }, h('table', { id: 'rpSummary' }, h('thead', null, h('tr', null, ['ชื่อ', 'สาขาหลัก', 'วันทำงาน', 'ครบ / ไม่มีเวลาออก', 'ชม.สุทธิ', 'พักรวม', 'มาสาย', 'พักเกิน', 'ออกก่อนเวลา', 'ยังไม่ยืนยัน'].map((t) => h('th', null, t)))), tb));
+}
+function dailyTable(rp) {
+  const tb = h('tbody');
+  if (!rp.rows.length) tb.append(h('tr', null, h('td', { colspan: 14, class: 'muted' }, 'ไม่มีข้อมูลตามตัวกรองนี้')));
+  const now = serverNow();
+  let net = 0, brk = 0, lateC = 0, lateM = 0, overC = 0, overM = 0, earlyC = 0, earlyM = 0;
+  for (const r of rp.rows) {
+    const x = r.rep, nSeg = x.segs.length;
+    net += x.netMin; brk += x.breakMin; if (x.isLate) { lateC++; lateM += x.lateMin; } if (x.isOverBreak) { overC++; overM += x.overBreakMin; } if (x.isEarly) { earlyC++; earlyM += x.earlyMin; }
+    const tags = remarksOf(x);
+    if (dateMismatch(r.d, x.sum.segments[0] ? x.sum.segments[0].inLog : null, now)) tags.push('วันไม่ตรง');
+    x.segs.forEach((g, i) => {
+      const st = g.status === 'live' ? 'กำลังทำงาน (ยังไม่นับ)' : g.status === 'missing' ? 'ไม่มีเวลาออก' : r.confirmed ? '🔒 ยืนยันแล้ว' : 'ยังไม่ยืนยัน';
+      tb.append(h('tr', { class: 'rprow', 'data-key': r.d + '|' + r.sid + '|' + g.n, style: 'cursor:pointer', title: 'ไปแก้ในบันทึกเวลา', onclick: () => gotoTimes(r.sid, r.d) },
+        h('td', null, dayLabel(r.d)), h('td', null, r.name), h('td', null, branchNameOf(x.branchId)), h('td', null, nSeg > 1 ? String(g.n) : ''),
+        h('td', { class: 'c-in' }, hhmmOf(g.inTs) + (g.inPlus ? ' (+1)' : '')), h('td', { class: 'c-out' }, g.outTs == null ? '—' : hhmmOf(g.outTs) + (g.outPlus ? ' (+1)' : '')),
+        h('td', { class: 'c-brk' }, g.status === 'closed' ? fmtNet(g.breakMin) : '—'), h('td', { class: 'c-net' }, g.netMin == null ? '—' : fmtNet(g.netMin)),
+        h('td', { class: 'c-late' }, i === 0 && x.isLate ? `${x.lateMin} นาที` : ''), h('td', { class: 'c-over' }, i === 0 && x.isOverBreak ? `${x.overBreakMin} นาที` : ''),
+        h('td', { class: 'c-early' }, i === nSeg - 1 && x.isEarly ? `${x.earlyMin} นาที` : ''),
+        h('td', { class: 'c-stat' }, st), h('td', null, tags.map((t) => h('span', { class: 'tag' }, t)))));
+    });
+  }
+  if (rp.rows.length) tb.append(h('tr', { class: 'rptotal', style: 'font-weight:700' }, h('td', { colspan: 6 }, 'รวม'), h('td', { class: 't-brk' }, fmtNet(brk)), h('td', { class: 't-net' }, fmtNet(net)),
+    h('td', { class: 't-late' }, `${lateC} ครั้ง · ${lateM} นาที`), h('td', { class: 't-over' }, `${overC} ครั้ง · ${overM} นาที`), h('td', { class: 't-early' }, `${earlyC} ครั้ง · ${earlyM} นาที`), h('td', null), h('td', null)));
+  return h('div', { style: 'overflow:auto' }, h('table', { id: 'rpDaily' }, h('thead', null, h('tr', null, ['วันที่', 'ชื่อ', 'สาขา', 'กะ', 'เข้า', 'ออก', 'พักรวม', 'สุทธิ', 'สาย', 'พักเกิน', 'ออกก่อนเวลา', 'สถานะ', 'ป้าย'].map((t) => h('th', null, t)))), tb));
+}
+function gotoTimesRange(from, to) {
+  T.mode = 'range'; T.from = from; T.to = to; T.sid = R.sid; T.branch = 'all'; T.onlyUnconf = true; T.sel = new Set(); T.ed = null; T.inline = null;
+  if (datesBetween(from, to, 31) === null) { T.mode = 'range'; T.to = to; T.from = addDaysKey(to, -30); }
+  showTab('times');
+}
+function reloadReport() {
+  const rg = reportRange(); const dates = (rg && datesBetween(rg.from, rg.to)) || [];
+  for (const d of dates) { delete T.cache.logs[d]; delete T.cache.days[d]; }
+  T.failed = new Set(); T.rangeErr = null;
+  renderReport();
+}
+function downloadCsv(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  const a = h('a', { href: url, download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+async function exportCsv(kind) {
+  const data = reportData();
+  if (!data.report || data.report.error || data.loading || !D.logsReady) { toast('ข้อมูลยังไม่พร้อม ลองอีกครั้ง'); return; }
+  const rp = data.report;
+  if (rp.warnings.unconfirmed > 0 && !(await confirmBox('ยังมีวันที่ไม่ยืนยัน', `มี ${rp.warnings.unconfirmed} วันยังไม่ยืนยัน ส่งออกต่อหรือไม่`, 'ส่งออกต่อ', 'orange'))) return;
+  const text = kind === 'daily' ? dailyCsv(rp, branchNameOf) : summaryCsv(rp, branchNameOf);
+  downloadCsv(`attendance-${kind}_${rp.from}_${rp.to}${R.sid !== 'all' ? '_' + R.sid : ''}.csv`, text);
+}
+
 /* ====== 3. พนักงาน ====== */
 const PIN_RE = /^[0-9]{4}$/, SHIFT_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 function branchSelect(val) {
@@ -1649,23 +2054,24 @@ function renderStaff() {
   if (!D.staff || !D.branches) return;
   // ไม่วาดทับขณะกำลังพิมพ์ในฟอร์มเพิ่มพนักงาน
   const keep = root.querySelector('#addForm');
-  const vals = keep ? { n: $('#addN').value, b: $('#addB').value, s: $('#addS').value, p1: $('#addP1').value, p2: $('#addP2').value } : null;
+  const vals = keep ? { n: $('#addN').value, b: $('#addB').value, s: $('#addS').value, e: $('#addE').value, p1: $('#addP1').value, p2: $('#addP2').value } : null;
   clear(root);
   root.append(h('h3', null, 'พนักงาน'));
   const hasBranch = Object.keys(D.branches).length > 0;
   const addN = h('input', { type: 'text', id: 'addN', maxlength: 20, placeholder: 'ชื่อเล่น' });
   const addB = branchSelect(); addB.id = 'addB';
-  const addS = h('input', { type: 'text', id: 'addS', value: '08:00', size: 6, maxlength: 5 });
+  const addS = h('input', { type: 'text', id: 'addS', value: '07:00', size: 6, maxlength: 5 });
+  const addE = h('input', { type: 'text', id: 'addE', value: '18:00', size: 6, maxlength: 5 });
   const addP1 = h('input', { type: 'password', id: 'addP1', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
   const addP2 = h('input', { type: 'password', id: 'addP2', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
-  if (vals) { addN.value = vals.n; if (vals.b) addB.value = vals.b; addS.value = vals.s; addP1.value = vals.p1; addP2.value = vals.p2; }
+  if (vals) { addN.value = vals.n; if (vals.b) addB.value = vals.b; addS.value = vals.s; if (vals.e) addE.value = vals.e; addP1.value = vals.p1; addP2.value = vals.p2; }
   const msg = h('span', { class: 'err', id: 'addErr' });
   root.append(h('div', { class: 'card', id: 'addForm' }, h('b', null, 'เพิ่มพนักงาน'),
     !hasBranch && h('div', { class: 'notice' }, 'ต้องสร้างสาขาก่อน (แท็บ "ตั้งค่าสาขา")'),
     h('div', { class: 'row' },
-      h('label', null, 'ชื่อเล่น', addN), h('label', null, 'สาขาหลัก', addB), h('label', null, 'เวลาเข้ากะ (HH:MM)', addS),
+      h('label', null, 'ชื่อเล่น', addN), h('label', null, 'สาขาหลัก', addB), h('label', null, 'เวลาเข้ากะ (HH:MM)', addS), h('label', null, 'เวลาเลิกกะ (HH:MM)', addE),
       h('label', null, 'PIN 4 หลัก', addP1), h('label', null, 'PIN อีกครั้ง', addP2),
-      h('button', { class: 'btn', disabled: !hasBranch, onclick: () => addStaff(addN, addB, addS, addP1, addP2, msg) }, 'เพิ่ม')),
+      h('button', { class: 'btn', disabled: !hasBranch, onclick: () => addStaff(addN, addB, addS, addE, addP1, addP2, msg) }, 'เพิ่ม')),
     msg));
   const tb = h('tbody');
   const rows = Object.entries(D.staff).sort((a, b) => (a[1].nickname || '').localeCompare(b[1].nickname || '', 'th'));
@@ -1675,6 +2081,7 @@ function renderStaff() {
       h('td', null, h('b', null, s.nickname)),
       h('td', null, ((D.branches || {})[s.branchId] || {}).name || s.branchId),
       h('td', null, s.shiftStart),
+      h('td', null, s.shiftEnd || '18:00'),
       h('td', null, h('span', { class: 'tag ' + (s.active === false ? 'bad' : 'ok') }, s.active === false ? 'ปิดใช้งาน' : 'ใช้งาน')),
       h('td', null, h('span', { class: 'tag ' + (s.uid && s.deviceApproved ? 'ok' : '') }, dev)),
       h('td', null, h('div', { class: 'row', style: 'margin:0' },
@@ -1683,20 +2090,21 @@ function renderStaff() {
         s.uid && h('button', { class: 'btn small gray', onclick: () => unbind(sid, s) }, 'ยกเลิกผูกเครื่อง'),
         h('button', { class: 'btn small ' + (s.active === false ? '' : 'red'), onclick: () => toggleActive(sid, s) }, s.active === false ? 'เปิดบัญชี' : 'ปิดบัญชี')))));
   }
-  root.append(h('table', null, h('thead', null, h('tr', null, ['ชื่อเล่น', 'สาขาหลัก', 'เวลาเข้ากะ', 'บัญชี', 'เครื่อง', ''].map((t) => h('th', null, t)))), tb));
+  root.append(h('table', null, h('thead', null, h('tr', null, ['ชื่อเล่น', 'สาขาหลัก', 'เวลาเข้ากะ', 'เวลาเลิกกะ', 'บัญชี', 'เครื่อง', ''].map((t) => h('th', null, t)))), tb));
 }
-async function addStaff(n, b, s, p1, p2, msg) {
+async function addStaff(n, b, s, e, p1, p2, msg) {
   msg.textContent = '';
   const nick = n.value.trim();
   if (!nick || nick.length > 20) return (msg.textContent = 'กรอกชื่อเล่น (ไม่เกิน 20 ตัวอักษร)');
   if (!b.value) return (msg.textContent = 'เลือกสาขา');
-  if (!SHIFT_RE.test(s.value)) return (msg.textContent = 'เวลาเข้ากะต้องเป็นรูปแบบ HH:MM เช่น 08:00');
+  if (!SHIFT_RE.test(s.value)) return (msg.textContent = 'เวลาเข้ากะต้องเป็นรูปแบบ HH:MM เช่น 07:00');
+  if (!SHIFT_RE.test(e.value)) return (msg.textContent = 'เวลาเลิกกะต้องเป็นรูปแบบ HH:MM เช่น 18:00');
   if (!PIN_RE.test(p1.value)) return (msg.textContent = 'PIN ต้องเป็นตัวเลข 4 หลัก');
   if (p1.value !== p2.value) return (msg.textContent = 'PIN สองครั้งไม่ตรงกัน');
   const sid = push(A('staff')).key;
   try {
     await update(A(''), {
-      [`staff/${sid}`]: { nickname: nick, branchId: b.value, shiftStart: s.value, active: true, createdAt: serverTimestamp() },
+      [`staff/${sid}`]: { nickname: nick, branchId: b.value, shiftStart: s.value, shiftEnd: e.value, active: true, createdAt: serverTimestamp() },
       [`staffSecret/${sid}`]: { pinHash: await sha256Hex(sid + p1.value) }
     });
     n.value = p1.value = p2.value = '';
@@ -1706,16 +2114,19 @@ function editStaff(sid, s) {
   const n = h('input', { type: 'text', maxlength: 20, '.value': s.nickname });
   const b = branchSelect(s.branchId);
   const sh = h('input', { type: 'text', maxlength: 5, size: 6, '.value': s.shiftStart });
+  const she = h('input', { type: 'text', maxlength: 5, size: 6, id: 'editEnd', placeholder: 'ค่าเริ่มต้น 18:00', '.value': s.shiftEnd || '' });
   const err = h('div', { class: 'err' });
-  openModal('แก้ไข ' + s.nickname, [h('div', { class: 'row' }, h('label', null, 'ชื่อเล่น', n), h('label', null, 'สาขาหลัก', b), h('label', null, 'เวลาเข้ากะ', sh)), err], [
+  openModal('แก้ไข ' + s.nickname, [h('div', { class: 'row' }, h('label', null, 'ชื่อเล่น', n), h('label', null, 'สาขาหลัก', b), h('label', null, 'เวลาเข้ากะ', sh), h('label', null, 'เวลาเลิกกะ', she)), err], [
     { label: 'ยกเลิก' },
     { label: 'บันทึก', cls: 'blue', onClick: async () => {
       const nick = n.value.trim();
       if (!nick || nick.length > 20) { err.textContent = 'ชื่อเล่นไม่ถูกต้อง'; return false; }
       if (!SHIFT_RE.test(sh.value)) { err.textContent = 'เวลาเข้ากะต้องเป็น HH:MM'; return false; }
+      if (she.value !== '' && !SHIFT_RE.test(she.value)) { err.textContent = 'เวลาเลิกกะต้องเป็น HH:MM'; return false; }
       const chg = { nickname: nick, branchId: b.value, shiftStart: sh.value };
+      if (she.value !== '' && she.value !== (s.shiftEnd || '')) chg.shiftEnd = she.value;   // ไม่เขียนค่าเริ่มต้นให้เองเมื่อเจ้าของไม่ได้แก้ช่องนี้
       const up = {}; for (const [k, v] of Object.entries(chg)) up[`staff/${sid}/${k}`] = v;
-      bestEffortAudit(up, 'staff/' + sid, { nickname: s.nickname, branchId: s.branchId, shiftStart: s.shiftStart }, chg, 'edit_staff');
+      bestEffortAudit(up, 'staff/' + sid, { nickname: s.nickname, branchId: s.branchId, shiftStart: s.shiftStart, shiftEnd: s.shiftEnd }, chg, 'edit_staff');
       try { await update(A(''), up); } catch (e) { err.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); return false; }
     } }
   ]);

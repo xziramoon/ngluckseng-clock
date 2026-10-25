@@ -114,6 +114,110 @@ function h(tag, attrs, ...kids) {
   return e;
 }
 const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+
+// ==== SHARED CORE v3 BEGIN — ต้องเหมือนกันทุกตัวอักษรใน clock.html และ clock-master.html (tests/core.test.mjs ตรวจ) ====
+// วิธีแก้: แก้ใน clock-master.html ก่อน คัดลอกทั้งบล็อกไป clock.html แล้วรัน cd tests && npm run test:core
+// ฟังก์ชันล้วน: ไม่อ้าง DOM / Firebase / Intl / ตัวแปรนอกบล็อก (ส่งค่าเข้ามาทาง ctx)
+const MIN_MS = 60000, DAY_MS = 86400000, BKK_OFFSET_MS = 25200000;
+const STALE_MS = 16 * 3600 * 1000;            // ค่าเดียวกับ 57600000 ใน database.rules.json
+const TYPE_ORDER = { in: 0, break_start: 1, break_end: 2, out: 3 };
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const isExcluded = (l) => !!l && (l.voided === true || l.review === 'rejected');
+const bkkDateOf = (ms) => new Date(ms + BKK_OFFSET_MS).toISOString().slice(0, 10);
+const hhmmOf = (ms) => new Date(ms + BKK_OFFSET_MS).toISOString().slice(11, 16);
+const tsOf = (d, hhmm, plusDay) => Date.parse(d + 'T' + hhmm + ':00+07:00') + (plusDay ? DAY_MS : 0);
+const addDaysKey = (d, n) => bkkDateOf(Date.parse(d + 'T12:00:00+07:00') + n * DAY_MS);
+const floorMin = (ts) => Math.floor(ts / MIN_MS);
+const logsToList = (obj) => Object.entries(obj || {}).filter(([, l]) => l && typeof l === 'object').map(([id, l]) => ({ ...l, id }))
+  .sort((a, b) => (a.ts || 0) - (b.ts || 0) || (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9));
+
+/** summarize v3: segment เริ่มด้วย in; ไม่นับ voided/rejected; ค่าระดับบนเท่า v2 (flags นับเฉพาะที่ยังไม่ตรวจ) */
+function summarize(logsObj) {
+  const ev = logsToList(logsObj).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+  const segments = [], flags = new Set(); let cur = null;
+  for (const e of ev) {
+    if (e.flag && !e.review) flags.add(e.flag);
+    if (e.type === 'in') { cur = { n: segments.length + 1, inTs: e.ts, inLog: e, outTs: null, outLog: null, breakMs: 0, breaks: [], openBreak: null, openBreakAtOut: false, orphanOut: false }; segments.push(cur); continue; }
+    if (!cur) continue;
+    if (e.type === 'break_start') { if (cur.openBreak == null) cur.openBreak = e.ts; }
+    else if (e.type === 'break_end') { if (cur.openBreak != null) { cur.breakMs += e.ts - cur.openBreak; cur.breaks.push([cur.openBreak, e.ts]); cur.openBreak = null; } }
+    else if (e.type === 'out') { if (cur.outTs != null) { cur.orphanOut = true; continue; } if (cur.openBreak != null) cur.openBreakAtOut = true; cur.outTs = e.ts; cur.outLog = e; }
+  }
+  const last = segments[segments.length - 1] || null;
+  const netMs = segments.filter((g) => g.outTs != null).reduce((a, g) => a + (g.outTs - g.inTs - g.breakMs), 0);
+  return { ev, segments, flags, inTs: segments[0] ? segments[0].inTs : null, outTs: last ? last.outTs : null, breakMs: segments.reduce((a, g) => a + g.breakMs, 0), openBreak: last ? last.openBreak : null, netMs };
+}
+
+/**
+ * สรุป 1 คน x 1 วันทำงาน (นาทีเต็มตามเวลาที่แสดง) ใช้ทุกหน้าจอ/รายงาน/CSV
+ * ctx = { shiftStart, shiftEnd, graceMin, homeBranchId, breakLimitFor(branchId), state, now }
+ */
+function dayReport(d, logsObj, ctx) {
+  const c = ctx || {};
+  const sum = summarize(logsObj);
+  const st = c.state || null;
+  const now = typeof c.now === 'number' ? c.now : 0;
+  const nSeg = sum.segments.length;
+  const segs = sum.segments.map((g, i) => {
+    const closed = g.outTs != null;
+    const breakMin = g.breaks.reduce((a, b) => a + (floorMin(b[1]) - floorMin(b[0])), 0);
+    let status = 'closed';
+    if (!closed) {
+      const live = i === nSeg - 1 && !!st && st.workDate === d && (st.status === 'working' || st.status === 'on_break') && typeof st.inAt === 'number' && now - st.inAt <= STALE_MS;
+      status = live ? 'live' : 'missing';
+    }
+    return {
+      n: g.n, inTs: g.inTs, outTs: g.outTs, inPlus: bkkDateOf(g.inTs) > d, outPlus: closed && bkkDateOf(g.outTs) > d,
+      breakMin, netMin: closed ? floorMin(g.outTs) - floorMin(g.inTs) - breakMin : null, status,
+      branchId: (g.inLog && g.inLog.branchId) || null, openBreakAtOut: g.openBreakAtOut, orphanOut: g.orphanOut
+    };
+  });
+  const closedSegs = segs.filter((g) => g.status === 'closed');
+  const netMin = closedSegs.reduce((a, g) => a + g.netMin, 0);
+  const breakMin = closedSegs.reduce((a, g) => a + g.breakMin, 0);
+  const breakMinAll = segs.reduce((a, g) => a + g.breakMin, 0);
+  const missing = segs.some((g) => g.status === 'missing'), live = segs.some((g) => g.status === 'live');
+  const openStatus = missing ? 'missing' : live ? 'live' : null;
+  const firstInTs = nSeg ? segs[0].inTs : null;
+  const lastOutTs = nSeg ? segs[nSeg - 1].outTs : null;
+  // มาสาย: นับจากเวลาเข้ากะ (ไม่หักผ่อนผัน) สายเมื่อเกินผ่อนผัน
+  const startOk = typeof c.shiftStart === 'string' && HHMM_RE.test(c.shiftStart);
+  const graceMin = typeof c.graceMin === 'number' ? c.graceMin : 5;
+  const lateRawMin = nSeg && startOk ? Math.floor((firstInTs - tsOf(d, c.shiftStart)) / MIN_MS) : null;
+  const isLate = lateRawMin != null && lateRawMin > graceMin;
+  // ออกก่อนเวลา: เฉพาะวันที่ครบ (ทุกกะมีเวลาออก) เทียบเวลาออกสุดท้ายกับเวลาเลิกกะ; เลิกกะน้อยกว่าเข้ากะ = ข้ามคืน (วันถัดไป)
+  const endStr = c.shiftEnd == null || c.shiftEnd === '' ? (startOk && c.shiftStart >= '18:00' ? null : '18:00') : c.shiftEnd;   // ค่าเริ่มต้น 18:00 ใช้เมื่อเข้ากะก่อน 18:00 เท่านั้น
+  const endOk = typeof endStr === 'string' && HHMM_RE.test(endStr);
+  const complete = nSeg > 0 && openStatus === null && lastOutTs != null;
+  const shiftEndTs = endOk ? tsOf(d, endStr, startOk && endStr < c.shiftStart) : null;
+  const earlyRawMin = complete && endOk ? floorMin(shiftEndTs) - floorMin(lastOutTs) : null;
+  const isEarly = earlyRawMin != null && earlyRawMin > 0;
+  // สาขา + พักเกิน (ต่อวัน: พักรวมทุกกะ > เวลาพักของสาขา)
+  const branchIds = [...new Set(sum.ev.map((l) => l.branchId).filter(Boolean))];
+  const branchId = (nSeg && segs[0].branchId) || c.homeBranchId || null;
+  const limRaw = typeof c.breakLimitFor === 'function' ? c.breakLimitFor(branchId) : null;
+  const lim = limRaw == null || limRaw === '' ? NaN : Number(limRaw);
+  const breakLimitMin = Number.isFinite(lim) ? lim : 60;
+  const isOverBreak = breakMinAll > breakLimitMin;
+  const all = Object.values(logsObj || {}).filter((l) => l && typeof l === 'object');
+  const anomalies = [];
+  if (segs.some((g) => g.openBreakAtOut)) anomalies.push('openBreakAtOut');
+  if (segs.some((g) => g.orphanOut)) anomalies.push('orphanOut');   // out ซ้ำในกะที่ปิดแล้ว: ไม่เปิดกะใหม่ ไม่นับ
+  if (segs.some((g) => g.netMin != null && g.netMin < 0)) anomalies.push('negativeNet');
+  if (segs.some((g) => g.status === 'closed' && floorMin(g.outTs) - floorMin(g.inTs) > 960)) anomalies.push('longShift');
+  return {
+    d, sum, segs, worked: nSeg > 0, firstInTs, lastOutTs, netMin, breakMin, breakMinAll,
+    closedCount: closedSegs.length, openStatus,
+    lateRawMin, isLate, lateMin: isLate ? lateRawMin : 0,
+    earlyRawMin, isEarly, earlyMin: isEarly ? earlyRawMin : (earlyRawMin != null ? 0 : null), shiftEndTs,
+    breakLimitMin, isOverBreak, overBreakMin: isOverBreak ? breakMinAll - breakLimitMin : 0,
+    branchId, branchIds, multiBranch: branchIds.length > 1,
+    flagsPending: sum.flags,
+    hasAdmin: sum.ev.some((l) => l.source === 'admin'), hasEdited: all.some((l) => l.origTs !== undefined), hasExcluded: all.some(isExcluded),
+    anomalies
+  };
+}
+// ==== SHARED CORE v3 END ====
 function card(title, ...body) { return h('div', { class: 'card' }, title && h('h2', null, title), ...body); }
 
 /* ====== หน้าที่ไม่ต้องใช้ Firebase ====== */
@@ -144,7 +248,6 @@ const timeF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', hour:
 const dateF = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' });
 const fmtTime = (ms) => timeF.format(ms);
 const bangkokDate = (ms) => dateF.format(ms);
-const STALE_MS = 16 * 3600 * 1000;
 const COOLDOWN_MS = 30000;
 function fmtClock(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
 function fmtMin(m) { m = Math.max(0, Math.round(m)); const hh = Math.floor(m / 60), mm = m % 60; return hh ? `${hh} ชม. ${String(mm).padStart(2, '0')} น.` : `${mm} นาที`; }
@@ -193,9 +296,9 @@ function onStaff() {
     stateUnsub = onValue(A('state/' + me.sid), (s) => { D.state = s.val(); syncLogs(); render(); }, onListenErr);
     if (corrUnsub) corrUnsub();
     D.corr = null;
-    corrUnsub = onValue(query(A('corrections'), orderByChild('staffId'), equalTo(me.sid)), (s) => { D.corr = s.val() || {}; render(); }, onListenErr);
+    corrUnsub = onValue(query(A('corrections'), orderByChild('staffId'), equalTo(me.sid)), (s) => { D.corr = s.val() || {}; render(); if (histView) histCorrRefresh(); }, onListenErr);
   }
-  if (!me && prev) { if (corrUnsub) corrUnsub(); corrUnsub = null; D.corr = null; corrView = null; if (stateUnsub) stateUnsub(); stateUnsub = null; D.state = undefined; if (logsUnsub) logsUnsub(); logsUnsub = null; logsKey = ''; D.logs = null; }
+  if (!me && prev) { histClear(prev); if (corrUnsub) corrUnsub(); corrUnsub = null; D.corr = null; corrView = null; if (stateUnsub) stateUnsub(); stateUnsub = null; D.state = undefined; if (logsUnsub) logsUnsub(); logsUnsub = null; logsKey = ''; D.logs = null; }
   if (me) { try { localStorage.setItem('clock.last', JSON.stringify({ sid: me.sid, nickname: me.s.nickname })); } catch (_) { } }
   render();
 }
@@ -226,28 +329,6 @@ function mainMode() {
   if (st.status === 'done') return st.workDate === today ? 'DONE' : 'OFF';
   return 'OFF';
 }
-/** รายการที่ไม่นับ: เจ้าของยกเลิก (voided) หรือกด ✘ ไม่ยืนยัน (rejected) */
-const isExcluded = (l) => !!l && (l.voided === true || l.review === 'rejected');
-const TYPE_ORDER = { in: 0, break_start: 1, break_end: 2, out: 3 };
-/** summarize v2: แบ่งเป็น segment ที่เริ่มด้วย in; ค่า inTs/outTs/breakMs/openBreak เท่าเดิมในกรณี 1 กะ/วัน */
-function summarize(logsObj) {
-  const ev = Object.entries(logsObj || {}).filter(([, l]) => l && typeof l.ts === 'number' && !isExcluded(l)).map(([id, l]) => ({ ...l, id }))
-    .sort((a, b) => a.ts - b.ts || (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9));
-  const segments = []; const flags = new Set(); let cur = null;
-  for (const e of ev) {
-    if (e.flag && !e.review) flags.add(e.flag);
-    if (e.type === 'in') { cur = { inTs: e.ts, outTs: null, breakMs: 0, openBreak: null }; segments.push(cur); continue; }
-    if (!cur) continue;
-    if (e.type === 'break_start') { if (cur.openBreak == null) cur.openBreak = e.ts; }
-    else if (e.type === 'break_end') { if (cur.openBreak != null) { cur.breakMs += e.ts - cur.openBreak; cur.openBreak = null; } }
-    else if (e.type === 'out') cur.outTs = e.ts;
-  }
-  const last = segments[segments.length - 1] || null;
-  const netMs = segments.filter((g) => g.outTs != null).reduce((a, g) => a + (g.outTs - g.inTs - g.breakMs), 0);
-  return { ev, segments, flags, inTs: segments[0] ? segments[0].inTs : null, outTs: last ? last.outTs : null, breakMs: segments.reduce((a, g) => a + g.breakMs, 0), openBreak: last ? last.openBreak : null, netMs };
-}
-/** เวลาไทย (+07:00 ตายตัว ไม่ขึ้นกับ timezone เครื่อง) */
-const tsOf = (d, hhmm, plusDay) => Date.parse(d + 'T' + hhmm + ':00+07:00') + (plusDay ? 86400000 : 0);
 const dayLabelF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'short', day: 'numeric', month: 'short' });
 const dayLabel = (d) => dayLabelF.format(Date.parse(d + 'T12:00:00+07:00'));
 const dayLongF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'long', day: 'numeric', month: 'short' });
@@ -621,6 +702,116 @@ function buildCorrNew() {
   }
 }
 
+/* ====== หน้า C ประวัติ 30 วัน (เฟส 3) ====== */
+const HIST_DAYS = 30, HIST_TTL_MS = 120000, HIST_GET_TIMEOUT_MS = 8000;
+let histView = false;       // true = เปิดหน้าประวัติ
+let hist = null;            // { sid, days: { d: summary }, savedAt, loadedAt, lastLogId, offline }
+let histVersion = 0, histLoading = false;
+if (EMU) window.__dbg = { histGets: 0 };
+const histKey = (sid) => 'clock.hist.' + sid;
+const histDates = () => { const out = [], t = serverNow(); for (let i = 0; i < HIST_DAYS; i++) out.push(bkkDateOf(t - i * DAY_MS)); return out; };
+const histCtx = (d) => ({ shiftStart: me.s.shiftStart, shiftEnd: me.s.shiftEnd, graceMin: Number((D.settings || {}).lateGraceMin ?? 5), homeBranchId: me.s.branchId, breakLimitFor: (b) => ((D.branches || {})[b] || {}).breakLimitMin, state: D.state, now: serverNow() });
+/** เก็บเฉพาะสรุป (ไม่มีพิกัด) */
+function histSummary(d, logsObj) {
+  const x = dayReport(d, logsObj, histCtx(d));
+  if (!x.worked) return null;
+  const last = x.segs[x.segs.length - 1];
+  const marks = [];
+  if (x.hasAdmin) marks.push('admin'); if (x.hasEdited) marks.push('edited'); if (x.hasExcluded) marks.push('excluded');
+  return { inTs: x.firstInTs, outTs: last.outTs, outPlus: !!last.outPlus, breakMin: x.breakMinAll, netMin: x.netMin, open: x.openStatus, segCount: x.segs.length, marks };
+}
+function histRead(sid) {
+  try { const o = JSON.parse(localStorage.getItem(histKey(sid)) || 'null'); if (o && o.v === 1 && o.sid === sid && o.days) return o; } catch (_) { }
+  return null;
+}
+function histSave() {
+  if (!hist) return;
+  const keep = new Set(histDates());
+  for (const d of Object.keys(hist.days)) if (!keep.has(d)) delete hist.days[d];     // ตัดวันที่เก่ากว่า 30 วัน
+  try { localStorage.setItem(histKey(hist.sid), JSON.stringify({ v: 1, sid: hist.sid, savedAt: hist.savedAt, days: hist.days })); } catch (_) { }
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+async function histFetchDays(list) {
+  const target = hist;
+  const res = await Promise.allSettled(list.map((d) => { if (window.__dbg) window.__dbg.histGets++; return withTimeout(get(A(`logs/${d}/${me.sid}`)), HIST_GET_TIMEOUT_MS); }));
+  if (!hist || hist !== target || !me) return false;     // ออกจากระบบ/เปลี่ยนคนระหว่างอ่าน
+  let failed = false;
+  res.forEach((r, i) => {
+    const d = list[i];
+    if (r.status === 'fulfilled') { const sm = histSummary(d, r.value.val()); if (sm) target.days[d] = sm; else delete target.days[d]; }
+    else failed = true;
+  });
+  return !failed;
+}
+async function histOpen() {
+  if (!me) return;
+  histView = true; corrView = null; corr = null;
+  if (!hist || hist.sid !== me.sid) { const c = histRead(me.sid); hist = { sid: me.sid, days: c ? c.days : {}, savedAt: c ? c.savedAt : null, loadedAt: 0, lastLogId: null, offline: false }; }
+  histVersion++; render();
+  const sig = (D.state && D.state.lastLogId) || '';
+  const fresh = hist.loadedAt && serverNow() - hist.loadedAt < HIST_TTL_MS && hist.lastLogId === sig;
+  if (fresh) { histCorrRefresh(); return; }
+  if (!connected) { hist.offline = true; histVersion++; render(); return; }
+  histLoading = true; histVersion++; render();
+  const cur = timelineDate();
+  const ok = await histFetchDays(histDates().filter((d) => d !== cur));
+  histLoading = false;
+  if (!hist || !histView || !me || hist.sid !== me.sid) return;
+  hist.loadedAt = serverNow(); hist.lastLogId = sig; hist.offline = !ok;
+  if (ok) hist.savedAt = serverNow();
+  histSave(); histVersion++; render();
+}
+/** เจ้าของตัดสินคำขอขณะเปิดหน้านี้ -> อ่านเพิ่มเฉพาะ workDate ของคำขอ */
+async function histCorrRefresh() {
+  if (!histView || !hist || !me || !connected) return;
+  const since = hist.loadedAt || 0;   // เวลาเซิร์ฟเวอร์ (serverNow) เทียบกับ decidedAt ที่เป็นเวลาเซิร์ฟเวอร์
+  const list = [...new Set(Object.values(D.corr || {}).filter((c) => c && typeof c.decidedAt === 'number' && c.decidedAt > since && c.workDate && c.workDate !== timelineDate()).map((c) => c.workDate))];
+  if (!list.length) return;
+  const target = hist;
+  const okc = await histFetchDays(list);
+  if (!hist || hist !== target || !histView) return;
+  if (okc) hist.loadedAt = serverNow();
+  histSave(); histVersion++; render();
+}
+function closeHist() { histView = false; render(); }
+function histClear(sid) { try { if (sid) localStorage.removeItem(histKey(sid)); } catch (_) { } hist = null; histView = false; }
+
+const MARK_TH = { admin: 'เจ้าของบันทึกให้', edited: 'เจ้าของแก้เวลา', excluded: 'มีรายการที่ไม่นับ' };
+function buildHist() {
+  ui = {};
+  $root.append(backBtn(closeHist));
+  $root.append(h('div', { class: 'hdr' }, h('span', null, 'ประวัติ 30 วัน')));
+  const cur = timelineDate();
+  const days = Object.assign({}, hist.days);
+  if (histDates().includes(cur)) { const sm = histSummary(cur, D.logs); if (sm) days[cur] = sm; else delete days[cur]; }
+  const dates = Object.keys(days).sort().reverse().filter((d) => histDates().includes(d));
+  const closed = dates.filter((d) => days[d].open === null);
+  const totalNet = closed.reduce((a, d) => a + days[d].netMin, 0);
+  $root.append(h('div', { class: 'small', id: 'histSum' }, `ทำงาน ${dates.length} วัน · ${fmtMin(totalNet)}`));
+  if (histLoading) $root.append(h('div', { class: 'small', id: 'histLoading' }, 'กำลังอัปเดต...'));
+  if (hist.offline && hist.savedAt) $root.append(h('div', { class: 'bar y', id: 'histOffline' }, `ไม่มีเน็ต — แสดงข้อมูลเมื่อ ${fmtTime(hist.savedAt)}`));
+  if (!dates.length && !histLoading) $root.append(card(null, h('div', null, 'ยังไม่มีบันทึกใน 30 วันนี้')));
+  const corrDays = correctionDays(), today = bkkDateOf(serverNow());
+  for (const d of dates) {
+    const x = days[d];
+    const right = x.open === 'live' ? 'กำลังทำงาน' : x.open === 'missing' ? 'ไม่มีเวลาออก' : fmtMin(x.netMin);
+    const rows = [h('div', { style: 'display:flex;justify-content:space-between;gap:8px;align-items:baseline' }, h('b', null, dayLabel(d)), h('span', { class: 'hnet', style: 'font-size:24px;font-weight:800' }, right))];
+    const inT = fmtTime(x.inTs), outT = x.outTs != null ? fmtTime(x.outTs) + (x.outPlus ? ' (เช้าวันถัดไป)' : '') : null;
+    rows.push(h('div', { class: 'hio' }, `${x.segCount > 1 ? x.segCount + ' กะ · ' : ''}เข้า ${inT}` + (outT ? ` · ออก ${outT}` : '')));
+    if (x.open !== 'missing' || x.breakMin) rows.push(h('div', { class: 'small hbrk' }, `พักรวม ${fmtMin(x.breakMin)}`));
+    const marks = (x.marks || []).map((m) => MARK_TH[m]).filter(Boolean);
+    for (const c of Object.values(D.corr || {})) {
+      if (!c || c.workDate !== d) continue;
+      marks.push(c.status === 'pending' ? 'รอเจ้าของแก้เวลา' : c.status === 'approved' ? 'เจ้าของแก้ให้แล้ว' : 'ไม่อนุมัติคำขอ');
+    }
+    if (marks.length) rows.push(h('div', null, [...new Set(marks)].map((m) => h('span', { class: 'stt ' + (m.includes('ไม่อนุมัติ') ? 'r' : m.includes('รอ') ? 'p' : 'a') }, m))));
+    const ageDays = Math.round((Date.parse(today + 'T12:00:00+07:00') - Date.parse(d + 'T12:00:00+07:00')) / DAY_MS);
+    if (x.open === 'missing' && ageDays <= corrDays) rows.push(h('button', { class: 'btn blue hfix', onclick: () => { histView = false; openCorrNew({ d, type: 'out' }); } }, 'แจ้งเวลาออก'));
+    $root.append(h('div', { class: 'card hday', 'data-d': d }, ...rows));
+  }
+  if (hist.savedAt) $root.append(h('div', { class: 'small', style: 'margin-top:8px' }, `อัปเดตเมื่อ ${fmtTime(hist.savedAt)}`));
+}
+
 /* ====== วาดหน้าจอ ====== */
 let lastKey = '';
 let ui = {};
@@ -630,6 +821,7 @@ function currentView() {
   if (me) {
     if (me.s.active === false) return 'DISABLED';
     if (D.state === undefined) return 'LOADING_MAIN';
+    if (histView) return 'HIST';
     if (corrView === 'LIST') return 'CORR_LIST';
     if (corrView === 'NEW' && corr) return 'CORR_NEW';
     return 'MAIN';
@@ -646,6 +838,7 @@ function currentView() {
 
 function viewKey(v) {
   if (v === 'MAIN') return ['MAIN', mainMode(), busy ? 'b' : '', refusal ? refusal.title : '', cooldownShown ? 'c' : '', connected ? '' : 'off', permState === 'granted' ? '' : permState].join('|');
+  if (v === 'HIST') return 'HIST|' + histVersion + '|' + Object.entries(D.corr || {}).map(([k, c]) => k + (c && c.status)).join() + '|' + Object.keys(D.logs || {}).length + ((D.state || {}).lastLogId || '') + '|' + (connected ? '' : 'off');
   if (v === 'CORR_LIST') return 'CORR_LIST|' + Object.entries(D.corr || {}).map(([k, c]) => k + (c && c.status)).join();
   if (v === 'CORR_NEW') return 'CORR_NEW|' + corr.step + '|' + (corr.sending ? 's' : '') + corr.err + '|' + (connected ? '' : 'off');
   if (v === 'PIN') return 'PIN' + reg.sid + reg.pin.length + reg.err;
@@ -675,6 +868,7 @@ function build(v) {
     case 'REJECTED': return $root.append(card('เจ้าของยังไม่อนุมัติ', h('div', null, 'ตรวจว่าเลือกชื่อและใส่รหัสถูก แล้วลงทะเบียนใหม่'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
     case 'REVOKED': return $root.append(card('เครื่องนี้ถูกยกเลิกการผูกแล้ว', h('div', null, 'ลงทะเบียนใหม่เพื่อใช้งานต่อ'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
     case 'MAIN': return buildMain();
+    case 'HIST': return buildHist();
     case 'CORR_LIST': return buildCorrList();
     case 'CORR_NEW': return buildCorrNew();
   }
@@ -787,6 +981,7 @@ function updateDynamic() {
   // ปุ่มหลัก
   const brkMs = (() => { const s = summarize(D.logs); return s.breakMs + (s.openBreak != null ? now - s.openBreak : 0); })();
   const sum = summarize(D.logs);
+  const rep = dayReport(timelineDate(), D.logs, { shiftStart: me.s.shiftStart, shiftEnd: me.s.shiftEnd, graceMin: Number((D.settings || {}).lateGraceMin ?? 5), homeBranchId: me.s.branchId, breakLimitFor: (b) => ((D.branches || {})[b] || {}).breakLimitMin, state: st, now });
   const nextType = { OFF: 'in', STALE: 'in', WORKING: 'break_start', ON_BREAK: 'break_end' }[mode];
   const disabled = !connected || !!busy || mode === 'DONE';
   ui.main.disabled = disabled;
@@ -796,7 +991,7 @@ function updateDynamic() {
   else if (busy === 'slow') { ui.mainLabel.textContent = 'เน็ตช้า กำลังส่ง...'; ui.mainSub.textContent = 'อย่าปิดแอป'; ui.main.className = 'big c-gray'; }
   else if (mode === 'DONE') {
     ui.mainLabel.textContent = 'ออกงานแล้ว';
-    ui.mainSub.textContent = sum.inTs != null && sum.outTs != null ? `ทำงาน ${fmtMin((sum.outTs - sum.inTs - sum.breakMs) / 60000)} · พัก ${fmtMin(sum.breakMs / 60000)}` : '';
+    ui.mainSub.textContent = rep.closedCount ? `ทำงาน ${fmtMin(rep.netMin)} · พัก ${fmtMin(rep.breakMin)}` : '';
   } else if (mode === 'ON_BREAK') {
     ui.mainLabel.textContent = LABEL.break_end;
     ui.timer.textContent = fmtClock(sum.openBreak != null ? now - sum.openBreak : 0);
@@ -825,7 +1020,9 @@ function updateDynamic() {
   // แจ้งแก้เวลา: ลิงก์ + สถานะคำขอ
   clear(ui.corrBox);
   const unseen = corrUnseen(), pend = corrPendingCount();
-  ui.corrBox.append(h('button', { class: 'btn link', onclick: openCorrList }, 'แจ้งแก้เวลา', unseen ? h('span', { class: 'dot' }) : null));
+  ui.corrBox.append(h('div', { style: 'display:flex;gap:8px' },
+    h('button', { class: 'btn link', id: 'histLink', style: 'flex:1', onclick: histOpen }, 'ประวัติ'),
+    h('button', { class: 'btn link', id: 'corrLink', style: 'flex:1', onclick: openCorrList }, 'แจ้งแก้เวลา', unseen ? h('span', { class: 'dot' }) : null)));
   if (unseen) ui.corrBox.append(h('div', { class: 'small', style: 'text-align:center', onclick: openCorrList }, 'เจ้าของตอบคำขอแล้ว — แตะเพื่อดู'));
   if (pend) ui.corrBox.append(h('div', { class: 'small', style: 'text-align:center' }, `คำขอแก้เวลา รออนุมัติ ${pend} รายการ`));
 }

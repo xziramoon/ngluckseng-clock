@@ -1,0 +1,16 @@
+{
+  "_comment": "ข้อมูลทดสอบเฟส 3: สาขาวงเวียนสาขาเดียว กะ 07:00-18:00 ผ่อนผันสาย 5 นาที พักได้ 60 นาที/วัน ใช้ทั้งใน tests/core.test.mjs (ต.ค. 2026) และ tests/seed-phase3.mjs (เดือนที่เลือก) ตัวเลขที่คำนวณมือดู docs/testing.md ข้อ 7",
+  "branch": { "id": "wongwian", "name": "สาขาวงเวียน", "lat": 17.318062, "lng": 99.832187, "radius": 10, "maxAccuracy": 30, "graceFactor": 2, "breakLimitMin": 60 },
+  "settings": { "lateGraceMin": 5 },
+  "staff": [
+    { "key": "A", "sid": "-OAa1", "nickname": "เอ", "shiftStart": "07:00", "shiftEnd": "18:00" },
+    { "key": "B", "sid": "-OBb2", "nickname": "บี", "shiftStart": "07:00", "shiftEnd": "18:00" }
+  ],
+  "days": [
+    { "day": 1, "staff": "A", "confirmed": true, "logs": [["in", "07:12"], ["break_start", "12:00"], ["break_end", "13:10"], ["out", "18:05"]] },
+    { "day": 2, "staff": "A", "confirmed": true, "logs": [["in", "06:58"], ["break_start", "12:00"], ["break_end", "12:45"], ["out", "17:50"]] },
+    { "day": 3, "staff": "B", "logs": [["in", "07:03"], ["break_start", "12:00"], ["break_end", "12:20"], ["out", "18:00"]] },
+    { "day": 4, "staff": "A", "source": "admin", "logs": [["in", "07:00"], ["out", "12:00"], ["in", "13:00"], ["out", "17:00"]] },
+    { "day": 5, "staff": "B", "logs": [["in", "07:30"]] }
+  ]
+}

@@ -3,7 +3,7 @@
 import { test, before, after, beforeEach, describe } from 'node:test';
 import fs from 'node:fs';
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
-import { ref, get, set, update, remove, push, serverTimestamp, query, orderByChild, equalTo, startAt, endAt } from 'firebase/database';
+import { ref, get, set, update, remove, push, serverTimestamp, query, orderByChild, equalTo, startAt, endAt, orderByKey } from 'firebase/database';
 
 const RULES = fs.readFileSync(new URL('../database.rules.json', import.meta.url), 'utf8');
 const [HOST, PORT] = (process.env.FIREBASE_DATABASE_EMULATOR_HOST || '127.0.0.1:9000').split(':');
@@ -926,6 +926,58 @@ describe('Security Rules attendance/', () => {
     await seed((adb) => remove(ref(adb, A('settings/calendarLast'))));
     await assertSucceeds(set(ref(db, A('corrections/wn')), body('2020-01-01')));
     await assertFails(set(ref(db, A('corrections/wm')), body('2020-13-45')));
+  });
+
+  // ================= เฟส 3 (R56-R60) =================
+  test('R56 พนักงานอ่าน logs ได้เฉพาะ logs/{วัน}/{ตัวเอง}: วันว่างได้ null, ของคนอื่น/ทั้งวัน/query ช่วง ปฏิเสธ', async () => {
+    await seedLog('s2', TODAY, 'X1', APPLOG({ uid: 'u2' }));
+    const db = anon('u1');
+    const snap = await assertSucceeds(get(ref(db, A('logs/2020-01-01/s1'))));
+    if (snap.val() !== null) throw new Error('วันที่ไม่มีข้อมูลต้องได้ null');
+    await assertSucceeds(get(ref(db, A(`logs/${TODAY}/s1`))));
+    await assertFails(get(ref(db, A(`logs/${TODAY}/s2`))));
+    await assertFails(get(ref(db, A(`logs/${TODAY}`))));
+    await assertFails(get(query(ref(db, A('logs')), orderByKey(), startAt('2026-01-01'), endAt('2026-12-31'))));
+    await assertFails(get(ref(db, A('logs'))));
+  });
+
+  test('R57 days: พนักงานอ่านไม่ได้; แอดมิน query logs/days แบบช่วง orderByKey ได้', async () => {
+    await seedLog('s1', TODAY, 'X1', APPLOG());
+    await seed((adb) => set(ref(adb, A(`days/${TODAY}/s1`)), { confirmed: true, confirmedBy: 'adm', confirmedAt: 1, auditId: 'seedaud' }));
+    await assertFails(get(ref(anon('u1'), A(`days/${TODAY}/s1`))));
+    await assertFails(get(ref(anon('u1'), A(`days/${TODAY}`))));
+    const db = adminEmail();
+    const l = await assertSucceeds(get(query(ref(db, A('logs')), orderByKey(), startAt(YESTERDAY), endAt(TODAY))));
+    const dd = await assertSucceeds(get(query(ref(db, A('days')), orderByKey(), startAt(YESTERDAY), endAt(TODAY))));
+    if (!l.val()[TODAY] || !dd.val()[TODAY]) throw new Error('ควรได้ข้อมูลของวันนี้');
+  });
+
+  test('R58 staff.shiftEnd: แอดมินตั้งได้ HH:MM เท่านั้น (ค่าผิดรูปแบบ/ชนิดผิดปฏิเสธ) และเป็น optional', async () => {
+    const db = adminEmail();
+    const base = { nickname: 'ใหม่', branchId: 'b1', shiftStart: '07:00', active: true };
+    await assertSucceeds(set(ref(db, A('staff/n1')), { ...base, shiftEnd: '18:00' }));
+    await assertSucceeds(set(ref(db, A('staff/n2')), { ...base, shiftEnd: '00:30' }));
+    await assertSucceeds(set(ref(db, A('staff/n3')), base));                                   // ไม่มี shiftEnd (ข้อมูลเดิม)
+    await assertSucceeds(update(ref(db, A('staff/s1')), { shiftEnd: '17:30' }));
+    for (const bad of ['24:00', '7:00', '18:60', 'abc', '', 1800, true]) await assertFails(set(ref(db, A('staff/n4')), { ...base, shiftEnd: bad }));
+    await assertFails(update(ref(db, A('staff/s1')), { shiftEnd: '25:00' }));
+    const v = (await get(ref(db, A('staff/s1/shiftEnd')))).val();
+    if (v !== '17:30') throw new Error('shiftEnd ต้องเก็บค่า');
+  });
+
+  test('R59 shiftEnd: พนักงาน/anonymous/แอดมินที่เป็น anonymous แก้ไม่ได้', async () => {
+    await assertFails(set(ref(anon('u1'), A('staff/s1/shiftEnd')), '10:00'));
+    await assertFails(update(ref(anon('u1'), A('staff/s1')), { shiftEnd: '10:00' }));
+    await assertFails(set(ref(anonAsAdminUid(), A('staff/s1/shiftEnd')), '10:00'));
+    await assertFails(set(ref(guest(), A('staff/s1/shiftEnd')), '10:00'));
+    await assertSucceeds(get(ref(anon('u9'), A('staff/s1'))));       // ยังอ่านได้ (แอปพนักงานใช้ shiftStart/shiftEnd)
+  });
+
+  test('R60 ฟิลด์แปลกใน staff ยังถูกปฏิเสธ (เพิ่ม shiftEnd ไม่เปิด $other)', async () => {
+    const db = adminEmail();
+    await assertFails(update(ref(db, A('staff/s1')), { shiftEnds: '18:00' }));
+    await assertFails(update(ref(db, A('staff/s1')), { shiftEnd: '18:00', extra: 1 }));
+    await assertSucceeds(update(ref(db, A('staff/s1')), { shiftEnd: '18:00', shiftStart: '07:00' }));
   });
 });
 

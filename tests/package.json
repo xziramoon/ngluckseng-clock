@@ -5,7 +5,8 @@
   "description": "Security Rules tests (Firebase Emulator) - devDependencies only",
   "scripts": {
     "test": "firebase emulators:exec --only database --project demo-clock \"node --test\"",
-    "pretest": "node -e \"require('fs').copyFileSync('../database.rules.json','database.rules.copy.json')\""
+    "pretest": "node -e \"require('fs').copyFileSync('../database.rules.json','database.rules.copy.json')\"",
+    "test:core": "node --test core.test.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^6.0.0",
