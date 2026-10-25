@@ -36,6 +36,13 @@
   #qr { display: inline-block; padding: 10px; background: #fff; margin-top: 10px; }
   #link { word-break: break-all; font-size: 14px; }
   [hidden] { display: none !important; }
+  button.warn { background: #9a6700; width: 100%; margin-top: 12px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; justify-content: center; z-index: 2000; }
+  .modal .box { background: #fff; width: 100%; max-width: 520px; border-radius: 16px 16px 0 0; padding: 18px 16px 24px; max-height: 92vh; overflow: auto; }
+  .modal h2 { font-size: 20px; }
+  .err { color: #cf222e; font-size: 16px; margin-top: 8px; min-height: 1.2em; }
+  .note { background: #fff8c5; border-radius: 10px; padding: 10px 12px; font-size: 15px; margin-top: 10px; }
+  code.hash { display: block; word-break: break-all; background: #f6f8fa; padding: 10px; border-radius: 8px; font-size: 14px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -78,6 +85,13 @@
       <button class="big" id="testBtn">ทดสอบกด "เข้างาน"</button>
       <p class="muted">อ่านตำแหน่ง 3 ครั้งแบบเดียวกับแอปจริง แล้วบอกว่าจะบันทึกได้หรือไม่</p>
       <div class="lockinfo" id="lockInfo"></div>
+      <button class="warn" id="adminBtn">📍 บันทึกตำแหน่งนี้เป็นจุดร้าน (super admin)</button>
+      <div id="newLinkBox" class="note" hidden>
+        <b>จุดร้านเปลี่ยนแล้ว</b> — ลิงก์/QR เดิมยังเป็นจุดเก่า ให้ใช้ลิงก์ใหม่นี้แทน
+        <div id="qrNew" style="margin-top:8px"></div>
+        <p id="linkNew" style="word-break:break-all;font-size:14px"></p>
+        <div class="row"><button id="copyNew">คัดลอกลิงก์ใหม่</button></div>
+      </div>
     </div>
     <div class="card">
       <div id="mapC" style="height:280px;border-radius:10px"></div>
@@ -88,8 +102,53 @@
       <ol id="log"></ol>
       <div class="row"><button class="sec" id="clearBtn">ล้างประวัติ</button></div>
     </div>
+    <div class="card" id="pinHistCard" hidden>
+      <h2>ประวัติการย้ายจุดร้าน (เครื่องนี้)</h2>
+      <ol id="pinHist" style="font-size:15px;margin:0;padding-left:20px"></ol>
+    </div>
+  </section>
+
+  <!-- ตั้งรหัส super admin (เปิดด้วย #admin-setup) -->
+  <section id="adminSetup" hidden>
+    <div class="card">
+      <h2>สร้างรหัส super admin</h2>
+      <p class="muted">พิมพ์ ID และรหัสผ่านที่ต้องการ หน้านี้จะแปลงเป็น "โค้ดล็อก" ซึ่งย้อนกลับเป็นรหัสผ่านไม่ได้ ส่งเฉพาะโค้ดล็อกให้ผู้ดูแลระบบใส่ในแอป ไม่ต้องส่งรหัสผ่าน</p>
+      <label>ID<input type="text" id="suId" autocomplete="off" autocapitalize="off"></label>
+      <label>รหัสผ่าน (อย่างน้อย 8 ตัว)<input type="password" id="suPw" autocomplete="new-password"></label>
+      <label>ยืนยันรหัสผ่าน<input type="password" id="suPw2" autocomplete="new-password"></label>
+      <div class="row"><button id="suMake">สร้างโค้ดล็อก</button></div>
+      <div class="err" id="suErr"></div>
+      <div id="suOut" hidden>
+        <p>โค้ดล็อก:</p><code class="hash" id="suHash"></code>
+        <div class="row"><button id="suCopy">คัดลอกโค้ดล็อก</button></div>
+      </div>
+      <div class="note">ใช้รหัสผ่านที่ไม่ซ้ำกับบัญชีอื่น (อีเมล ธนาคาร ฯลฯ) เพราะนี่คือตัวล็อกของหน้าทดสอบเท่านั้น</div>
+    </div>
   </section>
 </main>
+
+<!-- หน้าต่างยืนยัน super admin + บันทึกจุด -->
+<div class="modal" id="adm" hidden>
+  <div class="box">
+    <div id="admStep1">
+      <h2>ยืนยันตัวตน super admin</h2>
+      <label>ID<input type="text" id="admId" autocomplete="username" autocapitalize="off"></label>
+      <label>รหัสผ่าน<input type="password" id="admPw" autocomplete="current-password"></label>
+      <div class="err" id="admErr"></div>
+      <div class="row"><button id="admGo">ยืนยันแล้วหาตำแหน่ง</button><button class="sec" id="admCancel1">ยกเลิก</button></div>
+    </div>
+    <div id="admStep2" hidden>
+      <h2>บันทึกจุดร้านใหม่?</h2>
+      <div class="kv">
+        <span>ตำแหน่งใหม่</span><span id="pvPos"></span>
+        <span>ความแม่นยำ</span><span id="pvAcc"></span>
+        <span>ย้ายจากจุดเดิม</span><span id="pvMove"></span>
+      </div>
+      <div class="note" id="pvWarn" hidden></div>
+      <div class="row"><button id="admSave">บันทึกจุดนี้</button><button class="sec" id="admRetry">หาตำแหน่งใหม่</button><button class="sec" id="admCancel2">ยกเลิก</button></div>
+    </div>
+  </div>
+</div>
 <script>
 /* ตรรกะ geofence ชุดเดียวกับ clock.html (haversine / evaluate / sampleFix) */
 const $ = (id) => document.getElementById(id);
@@ -111,10 +170,44 @@ const fmtTime = (t) => new Date(t).toLocaleTimeString('th-TH', { hour12: false }
 const num = (v, d, lo, hi) => { const n = parseFloat(v); return isFinite(n) && n >= lo && n <= hi ? n : d; };
 
 const q = new URLSearchParams(location.search);
-const CHECK = q.has('lat') && q.has('lng');
+const ADMIN_SETUP = location.hash === '#admin-setup';
+const CHECK = q.has('lat') && q.has('lng') && !ADMIN_SETUP;
+
+/* ----- super admin (ตัวล็อกของหน้าทดสอบ) -----
+   ไม่เก็บรหัสผ่านในโค้ด เก็บแค่ "โค้ดล็อก" = PBKDF2-SHA256(ID + รหัสผ่าน) สร้างได้ที่ gps-test.html#admin-setup
+   หน้านี้เป็น static และ repo เป็น public จึงเป็นแค่ตัวกันย้ายจุดเล่น/พลาด ไม่ใช่ความปลอดภัยจริง
+   ระบบจริง (clock-master.html) ตรวจสิทธิ์ด้วย Firebase Auth + Security Rules */
+const ADMIN_LOCK = '';   // เช่น 'v1:3f9a...'
+async function adminLock(id, pw) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(id.trim().toLowerCase() + '\u0000' + pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: enc.encode('ngluckseng-clock/gps-test/v1'), iterations: 200000 }, key, 256);
+  return 'v1:' + [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+if (ADMIN_SETUP) {
+  $('adminSetup').hidden = false;
+  $('hdrSub').textContent = 'สร้างโค้ดล็อกสำหรับ super admin';
+  $('suMake').addEventListener('click', async () => {
+    const id = $('suId').value.trim(), pw = $('suPw').value;
+    $('suErr').textContent = ''; $('suOut').hidden = true;
+    if (id.length < 3) return ($('suErr').textContent = 'ID ต้องมีอย่างน้อย 3 ตัว');
+    if (pw.length < 8) return ($('suErr').textContent = 'รหัสผ่านต้องมีอย่างน้อย 8 ตัว');
+    if (pw !== $('suPw2').value) return ($('suErr').textContent = 'รหัสผ่านสองช่องไม่ตรงกัน');
+    if (!crypto.subtle) return ($('suErr').textContent = 'ต้องเปิดจากลิงก์ https');
+    $('suMake').disabled = true; $('suMake').textContent = 'กำลังสร้าง...';
+    $('suHash').textContent = await adminLock(id, pw);
+    $('suOut').hidden = false; $('suPw').value = $('suPw2').value = '';
+    $('suMake').disabled = false; $('suMake').textContent = 'สร้างโค้ดล็อก';
+  });
+  $('suCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('suHash').textContent); $('suCopy').textContent = 'คัดลอกแล้ว ✔'; }
+    catch (_) { prompt('คัดลอกโค้ดล็อกนี้', $('suHash').textContent); }
+  });
+}
 
 /* ======================= โหมดปักจุด ======================= */
-if (!CHECK) {
+if (!CHECK && !ADMIN_SETUP) {
   $('setup').hidden = false;
   $('hdrSub').textContent = 'โหมดปักจุดร้าน (ใช้บน PC) — ไม่บันทึกข้อมูลขึ้นเซิร์ฟเวอร์';
   const KEY = 'gpsTest.setup.v2';
@@ -171,7 +264,8 @@ if (CHECK) {
   let log = (() => { try { return JSON.parse(localStorage.getItem(LOGKEY)) || []; } catch (_) { return []; } })();
   const saveLog = () => { try { localStorage.setItem(LOGKEY, JSON.stringify(log)); } catch (_) {} };
 
-  $('lockInfo').textContent = `จุดร้าน ${B.lat}, ${B.lng} · รัศมี ${B.radius} ม. (ชายขอบถึง ${Math.round(B.radius * B.graceFactor)} ม.) · ยอมรับสัญญาณ ±${B.maxAccuracy} ม.`;
+  const showLockInfo = () => $('lockInfo').textContent = `จุดร้าน ${B.lat}, ${B.lng} · รัศมี ${B.radius} ม. (ชายขอบถึง ${Math.round(B.radius * B.graceFactor)} ม.) · ยอมรับสัญญาณ ±${B.maxAccuracy} ม.`;
+  showLockInfo();
 
   function evaluate(lat, lng, a) {
     const R = B.radius, M = B.maxAccuracy, g = B.graceFactor;
@@ -192,9 +286,9 @@ if (CHECK) {
 
   const map = L.map('mapC', { dragging: true }).setView([B.lat, B.lng], 19);
   baseLayers(map, true);
-  L.marker([B.lat, B.lng], { draggable: false, keyboard: false }).addTo(map);   // ล็อก ไม่ให้ย้าย
-  L.circle([B.lat, B.lng], { radius: B.radius, color: '#2da44e', fillOpacity: .2, interactive: false }).addTo(map);
-  L.circle([B.lat, B.lng], { radius: B.radius * B.graceFactor, color: '#fb8f44', fill: false, dashArray: '6 6', weight: 2, interactive: false }).addTo(map);
+  const shopPin = L.marker([B.lat, B.lng], { draggable: false, keyboard: false }).addTo(map);   // ล็อก ไม่ให้ย้าย
+  const shopR = L.circle([B.lat, B.lng], { radius: B.radius, color: '#2da44e', fillOpacity: .2, interactive: false }).addTo(map);
+  const shopG = L.circle([B.lat, B.lng], { radius: B.radius * B.graceFactor, color: '#fb8f44', fill: false, dashArray: '6 6', weight: 2, interactive: false }).addTo(map);
   const me = L.circleMarker([B.lat, B.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#0969da', fillOpacity: 1 });
   const meAcc = L.circle([B.lat, B.lng], { radius: 1, color: '#0969da', weight: 1, fillOpacity: .1, interactive: false });
 
@@ -264,6 +358,98 @@ if (CHECK) {
   });
   $('clearBtn').addEventListener('click', () => { log = []; saveLog(); renderLog(); });
   renderLog();
+
+  /* ----- super admin: บันทึกตำแหน่งปัจจุบันเป็นจุดร้าน ----- */
+  const NEED_ACC = 15;                       // ต้องแม่นอย่างน้อย ±15 ม. ถึงจะบันทึกได้
+  const TRYKEY = 'gpsTest.adminTries.v1', HISTKEY = 'gpsTest.pinHist.v1';
+  const readJ = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (_) { return d; } };
+  const writeJ = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
+  let candidate = null, adminBy = '';
+
+  function renderPinHist() {
+    const h = readJ(HISTKEY, []);
+    $('pinHistCard').hidden = !h.length;
+    $('pinHist').replaceChildren(...h.slice().reverse().map((r) => {
+      const li = document.createElement('li');
+      li.textContent = `${new Date(r.t).toLocaleString('th-TH', { hour12: false })} · ${r.by} · ${r.from} → ${r.to} (±${r.acc} ม., ย้าย ${fmtDist(r.moved)})`;
+      return li;
+    }));
+  }
+  const openAdm = () => {
+    $('adm').hidden = false; $('admStep1').hidden = false; $('admStep2').hidden = true;
+    $('admErr').textContent = ''; $('admPw').value = '';
+    $('pvPos').textContent = $('pvAcc').textContent = $('pvMove').textContent = '–'; $('pvWarn').hidden = true; $('admSave').disabled = true;
+    setTimeout(() => $('admId').focus(), 50);
+  };
+  const closeAdm = () => { $('adm').hidden = true; $('admPw').value = ''; candidate = null; adminBy = ''; };
+  $('adminBtn').addEventListener('click', openAdm);
+  $('admCancel1').addEventListener('click', closeAdm);
+  $('admCancel2').addEventListener('click', closeAdm);
+
+  async function locateCandidate() {
+    $('admStep1').hidden = true; $('admStep2').hidden = false;
+    $('pvPos').textContent = 'กำลังหาตำแหน่ง...'; $('pvAcc').textContent = $('pvMove').textContent = '–';
+    $('pvWarn').hidden = true; $('admSave').disabled = true;
+    try {
+      const { best } = await sampleFix();
+      candidate = { lat: +best.lat.toFixed(6), lng: +best.lng.toFixed(6), acc: Math.round(best.acc) };
+      const moved = haversine(B.lat, B.lng, candidate.lat, candidate.lng);
+      $('pvPos').textContent = candidate.lat + ', ' + candidate.lng;
+      $('pvAcc').textContent = '±' + candidate.acc + ' ม.';
+      $('pvMove').textContent = fmtDist(moved);
+      const warn = [];
+      if (candidate.acc > NEED_ACC) warn.push(`สัญญาณยังไม่แม่นพอ (±${candidate.acc} ม. ต้อง ±${NEED_ACC} ม. หรือดีกว่า) — ออกไปยืนหน้าร้านที่โล่ง แล้วกด "หาตำแหน่งใหม่"`);
+      if (moved > 50) warn.push(`จุดใหม่ห่างจุดเดิม ${fmtDist(moved)} — ตรวจว่ายืนอยู่หน้าร้านจริง`);
+      $('pvWarn').hidden = !warn.length; $('pvWarn').textContent = warn.join(' · ');
+      $('admSave').disabled = candidate.acc > NEED_ACC;
+      candidate.moved = moved;
+    } catch (e) {
+      $('pvPos').textContent = e && e.code === 1 ? 'ยังไม่ได้อนุญาตให้ใช้ตำแหน่ง' : 'หาตำแหน่งไม่ได้ — ลองใหม่';
+    }
+  }
+
+  $('admGo').addEventListener('click', async () => {
+    if (!ADMIN_LOCK) return ($('admErr').textContent = 'ยังไม่ได้ตั้งรหัส super admin ในแอป (ดู gps-test.html#admin-setup)');
+    const t = readJ(TRYKEY, { fails: 0, until: 0 });
+    if (Date.now() < t.until) return ($('admErr').textContent = `ใส่ผิดหลายครั้ง — รออีก ${Math.ceil((t.until - Date.now()) / 60000)} นาที`);
+    const id = $('admId').value.trim(), pw = $('admPw').value;
+    if (!id || !pw) return ($('admErr').textContent = 'ใส่ ID และรหัสผ่าน');
+    $('admGo').disabled = true; $('admGo').textContent = 'กำลังตรวจ...';
+    const ok = (await adminLock(id, pw)) === ADMIN_LOCK;
+    $('admGo').disabled = false; $('admGo').textContent = 'ยืนยันแล้วหาตำแหน่ง'; $('admPw').value = '';
+    if (!ok) {
+      t.fails += 1; if (t.fails >= 5) { t.fails = 0; t.until = Date.now() + 5 * 60000; }
+      writeJ(TRYKEY, t);
+      return ($('admErr').textContent = t.until > Date.now() ? 'ใส่ผิด 5 ครั้ง — ล็อก 5 นาที' : `ID หรือรหัสผ่านไม่ถูกต้อง (เหลือ ${5 - t.fails} ครั้ง)`);
+    }
+    writeJ(TRYKEY, { fails: 0, until: 0 });
+    adminBy = id;
+    await locateCandidate();
+  });
+  $('admRetry').addEventListener('click', locateCandidate);
+
+  $('admSave').addEventListener('click', () => {
+    if (!candidate || candidate.acc > NEED_ACC) return;
+    const from = B.lat + ', ' + B.lng;
+    B.lat = candidate.lat; B.lng = candidate.lng;
+    shopPin.setLatLng([B.lat, B.lng]); shopR.setLatLng([B.lat, B.lng]); shopG.setLatLng([B.lat, B.lng]);
+    map.setView([B.lat, B.lng], 19); showLockInfo(); refresh();
+    const h = readJ(HISTKEY, []);
+    h.push({ t: Date.now(), by: adminBy || '-', from, to: B.lat + ', ' + B.lng, acc: candidate.acc, moved: candidate.moved || 0 });
+    writeJ(HISTKEY, h.slice(-30)); renderPinHist();
+    const u = new URL(location.href); u.search = new URLSearchParams({ lat: B.lat, lng: B.lng, r: B.radius, acc: B.maxAccuracy, g: B.graceFactor }).toString(); u.hash = '';
+    history.replaceState(null, '', u.href);
+    $('linkNew').textContent = u.href; $('qrNew').replaceChildren();
+    if (window.QRCode) new QRCode($('qrNew'), { text: u.href, width: 180, height: 180 });
+    $('newLinkBox').hidden = false;
+    closeAdm();
+    navigator.vibrate?.(200);
+  });
+  $('copyNew').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('linkNew').textContent); $('copyNew').textContent = 'คัดลอกแล้ว ✔'; }
+    catch (_) { prompt('คัดลอกลิงก์นี้', $('linkNew').textContent); }
+  });
+  renderPinHist();
 }
 </script>
 </body>
