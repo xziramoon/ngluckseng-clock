@@ -175,7 +175,7 @@ const SETUP = location.hash === '#setup';               // โหมดปัก
 const CHECK = !ADMIN_SETUP && !SETUP;                    // ค่าเริ่มต้น: เช็กระยะ
 const HAS_PIN = q.has('lat') && q.has('lng');
 // จุดสาขาที่ใช้เมื่อเปิดหน้าโดยไม่มีพิกัดในลิงก์ (วัดจาก GPS หน้าร้านจริง 2026-10-25)
-const DEFAULT_BRANCH = { name: 'สาขาวงเวียน', lat: 17.318062, lng: 99.832187, r: 10, acc: 20, g: 1.5 };
+const DEFAULT_BRANCH = { name: 'สาขาวงเวียน', lat: 17.318062, lng: 99.832187, r: 10, acc: 30, g: 2 };
 window.addEventListener('hashchange', () => location.reload());
 
 /* ----- super admin (ตัวล็อกของหน้าทดสอบ) -----
@@ -216,7 +216,7 @@ if (SETUP) {
   $('setup').hidden = false;
   $('hdrSub').textContent = 'โหมดปักจุดร้าน (ใช้บน PC) — ไม่บันทึกข้อมูลขึ้นเซิร์ฟเวอร์';
   const KEY = 'gpsTest.setup.v2';
-  const S = Object.assign({ lat: 17.318062, lng: 99.832187, radius: 10, maxAccuracy: 20, graceFactor: 1.5 },
+  const S = Object.assign({ lat: 17.318062, lng: 99.832187, radius: 10, maxAccuracy: 30, graceFactor: 2 },
     (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (_) { return {}; } })());
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_) {} };
 
@@ -246,8 +246,8 @@ if (SETUP) {
   });
   $('radius').value = S.radius; $('maxAcc').value = S.maxAccuracy; $('grace').value = S.graceFactor;
   for (const id of ['radius', 'maxAcc', 'grace']) $(id).addEventListener('input', () => {
-    S.radius = num($('radius').value, 10, 10, 300); S.maxAccuracy = num($('maxAcc').value, 20, 5, 500);
-    S.graceFactor = num($('grace').value, 1.5, 1, 3); update();
+    S.radius = num($('radius').value, 10, 10, 300); S.maxAccuracy = num($('maxAcc').value, 30, 5, 500);
+    S.graceFactor = num($('grace').value, 2, 1, 3); update();
   });
   $('copyBtn').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText($('link').textContent); $('copyBtn').textContent = 'คัดลอกแล้ว ✔'; }
@@ -265,7 +265,7 @@ if (CHECK) {
   const B = {
     name: HAS_PIN ? (q.get('name') || '') : DEFAULT_BRANCH.name,
     lat: num(P.lat, NaN, -90, 90), lng: num(P.lng, NaN, -180, 180),
-    radius: num(P.r, 10, 10, 300), maxAccuracy: num(P.acc, 20, 5, 500), graceFactor: num(P.g, 1.5, 1, 3)
+    radius: num(P.r, 10, 10, 300), maxAccuracy: num(P.acc, 30, 5, 500), graceFactor: num(P.g, 2, 1, 3)
   };
   const LOGKEY = 'gpsTest.log.v2';
   let log = (() => { try { return JSON.parse(localStorage.getItem(LOGKEY)) || []; } catch (_) { return []; } })();

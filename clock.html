@@ -239,7 +239,7 @@ function evaluate(lat, lng, acc) {
     if (!best || d < best.d) best = { bid, b, d };
   }
   if (!best) return { verdict: 'nobranch' };
-  const R = Number(best.b.radius) || 10, M = Number(best.b.maxAccuracy) || 60, g = Number(best.b.graceFactor) || 1.5;
+  const R = Number(best.b.radius) || 10, M = Number(best.b.maxAccuracy) || 30, g = Number(best.b.graceFactor) || 2;
   const d = best.d, a = acc;
   let verdict, bReason = null;
   if (d <= R && a <= M) verdict = 'ok';

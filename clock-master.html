@@ -616,7 +616,7 @@ function buildBranchCard(bid, b) {
   }
   function fill(bb) {
     f.name.value = bb.name || ''; f.radius.value = f.radiusN.value = bb.radius ?? 10;
-    f.maxAcc.value = bb.maxAccuracy ?? 60; f.grace.value = bb.graceFactor ?? 1.5; f.brk.value = bb.breakLimitMin ?? 60;
+    f.maxAcc.value = bb.maxAccuracy ?? 30; f.grace.value = bb.graceFactor ?? 2; f.brk.value = bb.breakLimitMin ?? 60;
     f.active.checked = bb.active !== false;
     if (typeof bb.lat === 'number' && typeof bb.lng === 'number') { f.lat.value = bb.lat; f.lng.value = bb.lng; draw(bb.lat, bb.lng); map.setView([bb.lat, bb.lng], map.getZoom() < 15 ? 17 : map.getZoom(), { animate: false }); }
     else { f.lat.value = f.lng.value = ''; }
@@ -703,7 +703,7 @@ function renderBranches() {
   }
 }
 async function seedBranches() {
-  const base = { radius: 10, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60, active: true, updatedAt: serverTimestamp() };
+  const base = { radius: 10, maxAccuracy: 30, graceFactor: 2, breakLimitMin: 60, active: true, updatedAt: serverTimestamp() };
   try {
     await update(A(''), {
       // หน้าร้าน 59/9 ถ.เทศบาลดำริ 3 สวรรคโลก ฝั่งวงเวียน (วัดจาก GPS ที่ร้านจริง ตรงกับหมุดร้านใน OSM)
