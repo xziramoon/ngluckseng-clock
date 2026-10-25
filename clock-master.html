@@ -39,7 +39,7 @@ h3{margin:0 0 12px}
 .btn:disabled{background:#d1d5db;color:#6b7280;cursor:not-allowed}
 .btn.red{background:#dc2626}.btn.gray{background:#6b7280}.btn.blue{background:#2563eb}.btn.orange{background:#ea580c}
 .btn.small{padding:5px 10px;font-size:14px}
-input[type=text],input[type=number],input[type=password],select{padding:7px 9px;border:1px solid #9ca3af;border-radius:6px;background:#fff}
+input[type=text],input[type=number],input[type=password],input[type=time],input[type=date],select{padding:7px 9px;border:1px solid #9ca3af;border-radius:6px;background:#fff}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:8px 0}
 .row label{display:flex;flex-direction:column;font-size:14px;gap:3px}
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden}
@@ -69,6 +69,20 @@ th{background:#f9fafb;font-size:14px}
 #modal{background:#fff;border-radius:12px;padding:20px;min-width:320px;max-width:92vw}
 #modal h3{margin-top:0}
 #modal .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+/* เฟส 2 */
+#calwarn{background:#dc2626;color:#fff;padding:9px;text-align:center;font-weight:700;border-radius:8px;margin-bottom:10px}
+.rvwrap{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:14px;align-items:start}
+#rvSide{position:sticky;top:10px}
+.rvcard{cursor:pointer;border:2px solid transparent}
+.rvcard.sel{border-color:#2563eb}
+tr.locked td{background:#f3f4f6;color:#6b7280}
+.edtable{margin:8px 0}
+.edtable td{padding:4px 6px}
+.editor{background:#f9fafb;border:1px solid #d1d5db}
+.struck input,.struck select{text-decoration:line-through;opacity:.55}
+.inl{padding:3px 5px}
+.tcell{cursor:default}
+@media(max-width:900px){.rvwrap{grid-template-columns:1fr}#rvSide{position:static}}
 @media(max-width:700px){#app{flex-direction:column}#side{width:auto;flex-direction:row;flex-wrap:wrap}}
 </style>
 </head>
@@ -93,6 +107,7 @@ th{background:#f9fafb;font-size:14px}
     <h2>ลงเวลา · เจ้าของ</h2>
     <button class="tab on" data-tab="today">สถานะวันนี้</button>
     <button class="tab" data-tab="pending">รอตรวจ <span class="badge hidden" id="pendBadge">0</span></button>
+    <button class="tab" data-tab="times">บันทึกเวลา</button>
     <button class="tab" data-tab="staff">พนักงาน</button>
     <button class="tab" data-tab="branches">ตั้งค่าสาขา</button>
     <div class="sp"></div>
@@ -100,8 +115,10 @@ th{background:#f9fafb;font-size:14px}
     <button class="lock" id="lockBtn">ล็อกหน้าจอ</button>
   </nav>
   <main id="main">
+    <div id="calwarn" class="hidden"></div>
     <section id="p-today"></section>
     <section id="p-pending" class="hidden"></section>
+    <section id="p-times" class="hidden"></section>
     <section id="p-staff" class="hidden"></section>
     <section id="p-branches" class="hidden"></section>
   </main>
@@ -113,7 +130,7 @@ th{background:#f9fafb;font-size:14px}
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
 import { getAuth, setPersistence, browserSessionPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator }
   from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
-import { getDatabase, ref, onValue, get, update, set, remove, push, serverTimestamp, connectDatabaseEmulator }
+import { getDatabase, ref, onValue, get, update, set, remove, push, serverTimestamp, connectDatabaseEmulator, query, orderByKey, orderByChild, startAt, endAt, limitToLast, equalTo }
   from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js';
 
 /* ====== ตั้งค่า Firebase (เจ้าของใส่เอง ดู README ข้อ 7) ====== */
@@ -163,7 +180,7 @@ await setPersistence(auth, browserSessionPersistence);
 /* ====== เวลา / ฟอร์แมต ====== */
 let serverOffset = 0;
 const serverNow = () => Date.now() + serverOffset;
-const fmtTimeF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
+const fmtTimeF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const bkkDateF = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' });
 const fmtTime = (ms) => fmtTimeF.format(ms);
 const bangkokDate = (ms) => bkkDateF.format(ms);
@@ -223,8 +240,10 @@ function teardown() {
   isAdminSession = false;
   unsubs.forEach((u) => { try { u(); } catch (_) { } }); unsubs = [];
   timers.forEach(clearInterval); timers = [];
-  for (const k of Object.keys(D)) D[k] = (k === 'logs') ? {} : null;
-  for (const id of ['p-today', 'p-pending', 'p-staff', 'p-branches']) clear($('#' + id));
+  for (const k of Object.keys(D)) D[k] = (k === 'logsWin') ? {} : null;
+  winKey = ''; selectedKey = null;
+  T.ed = null; T.inline = null; T.sel = new Set(); T.cache = { logs: {}, days: {} };
+  for (const id of ['p-today', 'p-pending', 'p-times', 'p-staff', 'p-branches']) clear($('#' + id));
   destroyMaps();
   closeModal();
   $('#who').textContent = '';
@@ -272,42 +291,47 @@ setInterval(() => {
 }, 30000);
 
 /* ====== ข้อมูลสด ====== */
-const D = { branches: null, settings: null, staff: null, state: null, secret: null, requests: null, logs: {} };
-let logDates = [];
+const D = { branches: null, settings: null, staff: null, state: null, secret: null, requests: null, logsWin: {}, days: null, corrPending: null, calLast: null };
 
 function listen(path, key) {
   unsubs.push(onValue(A(path), (s) => { D[key] = s.val() || {}; refresh(); }, (e) => console.warn('listen', path, e.code)));
 }
-function listenLogs() {
-  // ฟัง logs ของวันนี้กับเมื่อวาน (เผื่อกะข้ามคืน)
-  const want = [bangkokDate(serverNow()), bangkokDate(serverNow() - 86400000)];
-  if (want.join() === logDates.join()) return;
-  logDates = want;
-  logUnsubs.forEach((u) => u()); logUnsubs = [];
-  D.logs = {};
-  for (const d of want) logUnsubs.push(onValue(A('logs/' + d), (s) => { D.logs[d] = s.val() || {}; refresh(); }, (e) => console.warn('logs', e.code)));
+/* หน้าต่างข้อมูลย้อนหลัง (reviewDays) : logs/days แบบ orderByKey().startAt(from) ไม่มี endAt เพื่อจับวันในอนาคตด้วย */
+let winKey = '', winUnsubs = [];
+const reviewDays = () => { const v = Number((D.settings || {}).reviewDays); return v >= 7 && v <= 92 ? Math.floor(v) : 31; };
+function listenWindow() {
+  if (!D.settings) return;
+  const from = bangkokDate(serverNow() - reviewDays() * 86400000);
+  if (from === winKey) return;
+  winKey = from;
+  winUnsubs.forEach((u) => u()); winUnsubs = [];
+  D.logsWin = {}; D.days = null;
+  winUnsubs.push(onValue(query(A('logs'), orderByKey(), startAt(from)), (s) => { D.logsWin = s.val() || {}; refresh(); }, (e) => console.warn('logs', e.code)));
+  winUnsubs.push(onValue(query(A('days'), orderByKey(), startAt(from)), (s) => { D.days = s.val() || {}; refresh(); }, (e) => console.warn('days', e.code)));
 }
-let logUnsubs = [];
 
 function startApp() {
-  logDates = []; logUnsubs = [];
+  winKey = ''; winUnsubs = [];
   unsubs.push(onValue(ref(db, '.info/serverTimeOffset'), (s) => { serverOffset = s.val() || 0; }));
   listen('branches', 'branches'); listen('settings', 'settings'); listen('staff', 'staff');
   listen('state', 'state'); listen('staffSecret', 'secret'); listen('deviceRequests', 'requests');
-  listenLogs();
-  unsubs.push(() => { logUnsubs.forEach((u) => u()); logUnsubs = []; });
-  timers.push(setInterval(() => { listenLogs(); if (curTab === 'today') renderToday(); }, 1000));
+  unsubs.push(onValue(query(A('corrections'), orderByChild('status'), equalTo('pending')), (s) => { D.corrPending = s.val() || {}; refresh(); }, (e) => console.warn('corr', e.code)));
+  unsubs.push(onValue(query(A('calendar'), orderByKey(), limitToLast(1)), (s) => { D.calLast = Object.keys(s.val() || {})[0] || ''; refresh(); }, (e) => console.warn('calendar', e.code)));
+  unsubs.push(() => { winUnsubs.forEach((u) => u()); winUnsubs = []; });
+  timers.push(setInterval(() => { listenWindow(); if (curTab === 'today') renderToday(); }, 1000));
   bump();
   showTab(curTab);
 }
 
+const TABS = ['today', 'pending', 'times', 'staff', 'branches'];
 let curTab = 'today';
 function showTab(t) {
   curTab = t;
   document.querySelectorAll('#side .tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
-  for (const id of ['today', 'pending', 'staff', 'branches']) $('#p-' + id).classList.toggle('hidden', id !== t);
+  for (const id of TABS) $('#p-' + id).classList.toggle('hidden', id !== t);
   refresh();
   if (t === 'branches') setTimeout(() => mapCards.forEach((c) => c.map.invalidateSize()), 50);
+  if (t === 'pending') setTimeout(() => reviewMap && reviewMap.invalidateSize(), 50);
 }
 document.querySelectorAll('#side .tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -318,29 +342,336 @@ function refresh() {
   queueMicrotask(() => {
     refreshQueued = false;
     if (!auth.currentUser) return;
-    const pend = Object.values(D.requests || {}).filter((r) => r && r.status === 'pending').length;
-    const bd = $('#pendBadge'); bd.textContent = pend; bd.classList.toggle('hidden', pend === 0);
+    listenWindow();
+    updateBadges();
+    renderCalWarn();
     if (curTab === 'today') renderToday();
     else if (curTab === 'pending') renderPending();
+    else if (curTab === 'times') renderTimes();
     else if (curTab === 'staff') renderStaff();
     else if (curTab === 'branches') renderBranches();
   });
 }
 
-/* ====== 1. สถานะวันนี้ ====== */
+/* ====== ตรรกะกลาง (ฟังก์ชันล้วน) ====== */
+const GRACE_MS = 15 * 60000;                       // ผ่อนผันเที่ยงคืน
+const LONG_SHIFT_MS = 16 * 3600000;
+const TYPE_TH = { in: 'เข้างาน', break_start: 'เริ่มพัก', break_end: 'กลับจากพัก', out: 'ออกงาน' };
+const TYPE_ORDER = { in: 0, break_start: 1, break_end: 2, out: 3 };
+const NEXT = { in: 'working', break_start: 'on_break', break_end: 'working', out: 'done' };
+/** เวลาไทย +07:00 ตายตัว ไม่ขึ้นกับ timezone ของ PC */
+const tsOf = (d, hhmm, plusDay) => Date.parse(d + 'T' + hhmm + ':00+07:00') + (plusDay ? 86400000 : 0);
+const midnightAfter = (d) => Date.parse(d + 'T00:00:00+07:00') + 86400000;
+const plusDayOf = (d, ts) => bangkokDate(ts) > d;
+/** รายการที่ไม่นับ: ยกเลิก (voided) หรือกด ✘ ไม่ยืนยัน (rejected) */
+const isExcluded = (l) => !!l && (l.voided === true || l.review === 'rejected');
+const dayLabelF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'short', day: 'numeric', month: 'short' });
+const dayLabel = (d) => dayLabelF.format(Date.parse(d + 'T12:00:00+07:00'));
+/** เวลา HH:MM ของ ts + (+1) ถ้าข้ามวันของวันทำงาน d */
+const fmtT = (ts, d) => fmtTime(ts) + (d && plusDayOf(d, ts) ? ' (+1)' : '');
+const logsToList = (obj) => Object.entries(obj || {}).filter(([, l]) => l && typeof l === 'object').map(([id, l]) => ({ ...l, id }))
+  .sort((a, b) => (a.ts || 0) - (b.ts || 0) || (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9));
+
+/** summarize v2: segment เริ่มด้วย in; ค่า inTs/outTs/breakMs/openBreak เท่าเดิมในกรณี 1 กะ/วัน (flags นับเฉพาะที่ยังไม่ตรวจ) */
 function summarize(logsObj) {
-  const ev = Object.values(logsObj || {}).filter((l) => l && typeof l.ts === 'number').sort((a, b) => a.ts - b.ts);
-  const r = { inTs: null, outTs: null, breakMs: 0, openBreak: null, flags: new Set() };
+  const ev = logsToList(logsObj).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+  const segments = [], flags = new Set(); let cur = null;
   for (const e of ev) {
-    if (e.flag) r.flags.add(e.flag);
-    if (e.type === 'in') { r.inTs = e.ts; r.outTs = null; r.breakMs = 0; r.openBreak = null; }
-    else if (e.type === 'break_start') r.openBreak = e.ts;
-    else if (e.type === 'break_end' && r.openBreak != null) { r.breakMs += e.ts - r.openBreak; r.openBreak = null; }
-    else if (e.type === 'out') r.outTs = e.ts;
+    if (e.flag && !e.review) flags.add(e.flag);
+    if (e.type === 'in') { cur = { inTs: e.ts, inLog: e, outTs: null, outLog: null, breakMs: 0, openBreak: null }; segments.push(cur); continue; }
+    if (!cur) continue;
+    if (e.type === 'break_start') { if (cur.openBreak == null) cur.openBreak = e.ts; }
+    else if (e.type === 'break_end') { if (cur.openBreak != null) { cur.breakMs += e.ts - cur.openBreak; cur.openBreak = null; } }
+    else if (e.type === 'out') { cur.outTs = e.ts; cur.outLog = e; }
   }
-  return r;
+  const last = segments[segments.length - 1] || null;
+  const netMs = segments.filter((g) => g.outTs != null).reduce((a, g) => a + (g.outTs - g.inTs - g.breakMs), 0);
+  return { ev, segments, flags, inTs: segments[0] ? segments[0].inTs : null, outTs: last ? last.outTs : null, breakMs: segments.reduce((a, g) => a + g.breakMs, 0), openBreak: last ? last.openBreak : null, netMs };
 }
 
+/** กะที่วันทำงาน d "ไม่ตรงกับเวลาจริง" ของ in หรือไม่ (วันอนาคต / คนละวันเกินผ่อนผัน 15 นาทีหลังเที่ยงคืน) ถ้า in ถูกยืนยันแล้วไม่ติดธง */
+function dateMismatch(d, inLog, now) {
+  if (inLog && inLog.review === 'approved') return false;
+  if (d > bangkokDate(now)) return true;
+  if (!inLog || typeof inLog.ts !== 'number') return false;
+  if (bangkokDate(inLog.ts) === d) return false;
+  const mid = midnightAfter(d);
+  return !(inLog.ts >= mid && inLog.ts < mid + GRACE_MS);
+}
+
+/** ตรวจลำดับเหตุการณ์ของวัน d (ev เรียงตามเวลาและนับเฉพาะรายการที่นับ) -> { errors, warnings, closed, segments } */
+function validateSeq(d, ev, now) {
+  const errors = [], warnings = [], segments = [];
+  const add = (arr, m) => { if (!arr.includes(m)) arr.push(m); };
+  let status = 'off', cur = null;
+  ev.forEach((e, i) => {
+    const at = `${TYPE_TH[e.type] || e.type} ${fmtT(e.ts, d)}`;
+    if (e.ts > now + 2000) add(errors, `${at} — เวลาอยู่ในอนาคต`);
+    if (i > 0 && e.ts <= ev[i - 1].ts) add(errors, 'เวลาต้องเรียงจากก่อนไปหลัง (มีรายการเวลาเท่ากัน)');
+    if (i === 0 && e.type !== 'in') add(errors, `รายการแรกต้องเป็นเข้างาน (ตอนนี้เป็น ${TYPE_TH[e.type]})`);
+    if (e.type === 'in') {
+      if (status === 'working' || status === 'on_break') add(errors, `เข้างานซ้ำโดยยังไม่ออกงาน (${fmtT(e.ts, d)})`);
+      cur = { inTs: e.ts, outTs: null, breakMs: 0, openBreak: null }; segments.push(cur); status = 'working';
+    } else if (e.type === 'break_start') {
+      if (status === 'working') { cur.openBreak = e.ts; status = 'on_break'; }
+      else add(errors, status === 'on_break' ? `เริ่มพักซ้ำ (${fmtT(e.ts, d)})` : `เริ่มพักโดยไม่ได้อยู่ในกะ (${fmtT(e.ts, d)})`);
+    } else if (e.type === 'break_end') {
+      if (status === 'on_break') { cur.breakMs += e.ts - cur.openBreak; cur.openBreak = null; status = 'working'; }
+      else add(errors, `กลับจากพักโดยไม่มีเริ่มพัก (${fmtT(e.ts, d)})`);
+    } else if (e.type === 'out') {
+      if (status === 'working') { cur.outTs = e.ts; status = 'done'; }
+      else if (status === 'on_break') add(errors, 'ต้องกลับจากพักก่อนออกงาน');
+      else add(errors, `ออกงานโดยไม่ได้เข้างาน (${fmtT(e.ts, d)})`);
+    }
+  });
+  for (const g of segments) {
+    if (g.outTs == null) continue;
+    if (g.outTs - g.inTs > 24 * 3600000) add(errors, `กะเริ่ม ${fmtT(g.inTs, d)} ยาวเกิน 24 ชั่วโมง`);
+    else if (g.outTs - g.inTs > LONG_SHIFT_MS) add(warnings, `กะเริ่ม ${fmtT(g.inTs, d)} ยาวเกิน 16 ชั่วโมง`);
+  }
+  if (segments.length > 1) add(warnings, `มี ${segments.length} กะในวันเดียว`);
+  if (segments[0] && bangkokDate(segments[0].inTs) !== d && !(segments[0].inTs >= midnightAfter(d) && segments[0].inTs < midnightAfter(d) + GRACE_MS)) add(warnings, `เวลาเข้างานแรกไม่อยู่ในวันที่ ${d}`);
+  const closed = ev.length === 0 || status === 'done';
+  if (!closed && ev.length) add(warnings, 'ยังไม่มีเวลาออก');
+  return { errors, warnings, closed, segments };
+}
+
+/**
+ * คำนวณ state ใหม่หลังแอดมินแก้ (ข้อ 5.4) -> { state, error } state=null แปลว่าไม่ต้องเขียน
+ * evAfter = รายการที่นับของวัน d เรียงเวลา (มี id, branchId, lat/lng ถ้าเป็น log app)
+ */
+function deriveState(sid, d, evAfter, oldState, now, force) {
+  const affects = force || !oldState || !oldState.workDate || d >= oldState.workDate;
+  if (!affects) return { state: null };
+  const oldLive = oldState && (oldState.status === 'working' || oldState.status === 'on_break') && now - (oldState.inAt || 0) <= STALE_MS;
+  if (!force && oldState && oldState.workDate && d > oldState.workDate && oldLive) return { state: null, error: `กะวันที่ ${oldState.workDate} ยังไม่ปิด — เพิ่มเวลาออกของกะนั้นก่อน` };
+  if (!evAfter.length) {
+    if (force && !(oldState && oldState.status === 'off' && oldState.workDate === d)) return { state: { status: 'off', workDate: d, since: Math.round(now) - 31000, prevLogId: (oldState && oldState.lastLogId) || '-' } };
+    if (oldState && oldState.workDate === d && oldState.status !== 'off') return { state: { status: 'off', workDate: d, since: Math.round(now) - 31000, prevLogId: oldState.lastLogId || '-' } };
+    return { state: null };
+  }
+  const last = evAfter[evAfter.length - 1];
+  let seg = null;
+  for (const e of evAfter) { if (e.type === 'in') seg = e.ts; }
+  if (seg == null) return { state: null, error: 'ไม่พบเวลาเข้างานของกะ' };
+  const st = { status: NEXT[last.type], workDate: d, since: last.ts, inAt: seg, lastLogId: last.id };
+  if (last.branchId) st.lastBranchId = last.branchId;
+  const lastApp = [...evAfter].reverse().find((e) => e.source === 'app' && typeof e.lat === 'number');
+  if (lastApp) { st.lastLat = lastApp.lat; st.lastLng = lastApp.lng; }
+  if (oldState && ['status', 'workDate', 'inAt', 'lastLogId', 'since'].every((k) => oldState[k] === st[k])) return { state: null };
+  st.prevLogId = (oldState && oldState.lastLogId) || '-';
+  return { state: st };
+}
+
+/** ข้อความสถานะภาษาไทยของ state ที่จะเขียน */
+function stateText(st) {
+  const m = { off: 'ยังไม่ได้เข้างาน', working: 'ทำงานอยู่', on_break: 'พักอยู่', done: 'ออกงานแล้ว' };
+  return `${m[st.status] || st.status} (กะ ${dayLabel(st.workDate)})`;
+}
+
+/**
+ * ใส่ audit ให้ทุก node (ข้อ 4): items = [{ path, before?, after, op }]
+ * logs/state/days ต้องพก auditId ใหม่ (rules ตรวจ); logs ใส่ editedBy/editedAt ด้วย; before ของ node ใหม่ต้องไม่มี key
+ */
+function withAudit(updates, items, opts) {
+  const o = opts || {};
+  for (const it of items) {
+    const aid = push(A('audit')).key;
+    const bound = it.path.startsWith('logs/') || it.path.startsWith('state/') || it.path.startsWith('days/');
+    const after = bound ? Object.assign({}, it.after, { auditId: aid }) : Object.assign({}, it.after);
+    if (it.path.startsWith('logs/')) { after.editedBy = uidNow; after.editedAt = serverTimestamp(); }
+    updates[it.path] = after;
+    const a = { path: it.path, after, by: uidNow, byEmail: auth.currentUser.email, at: serverTimestamp(), op: it.op, group: o.group };
+    if (it.before) a.before = clean(it.before);
+    if (o.refId) a.ref = o.refId;
+    if (o.reason) a.reason = o.reason.slice(0, 300);
+    updates['audit/' + aid] = a;
+  }
+  return updates;
+}
+/** ตัดฟิลด์ที่เป็น null/undefined ออก (RTDB ไม่เก็บ null ใน object ซ้อน) */
+function clean(obj) { const r = {}; for (const [k, v] of Object.entries(obj)) if (v !== null && v !== undefined) r[k] = v; return r; }
+
+/** สร้างแผนการแก้ของวัน d ของพนักงาน sid (ยังไม่เขียนอะไร) -> { error } | { changed, evAfter, v, st, ... } */
+function planChange({ sid, d, fresh, edits, now, force }) {
+  const logsAfter = {};
+  for (const [id, l] of Object.entries(fresh.logs || {})) logsAfter[id] = l;
+  const changed = [];
+  for (const ed of edits) {
+    if (ed.create) {
+      const id = ed.id || push(A(`logs/${d}/${sid}`)).key;
+      const node = { type: ed.create.type, ts: ed.create.ts, branchId: ed.create.branchId, source: 'admin' };
+      if (ed.create.note) node.note = ed.create.note;
+      if (ed.create.correctionId) node.correctionId = ed.create.correctionId;
+      logsAfter[id] = node; changed.push({ id, before: null, after: node, op: ed.op || 'add_log' });
+    } else {
+      const old = fresh.logs[ed.id];
+      if (!old) return { error: 'ไม่พบรายการที่จะแก้ (อาจถูกเปลี่ยนไปแล้ว) โหลดใหม่แล้วลองอีกครั้ง' };
+      const node = Object.assign({}, logsAfter[ed.id]);
+      for (const [k, v] of Object.entries(ed.set)) { if (v === null || v === undefined) delete node[k]; else node[k] = v; }
+      if (ed.set.ts !== undefined && ed.set.ts !== old.ts && old.source === 'app' && old.origTs === undefined) node.origTs = old.ts;   // เก็บเวลาจริงจากเซิร์ฟเวอร์ไว้ถาวร
+      if (JSON.stringify(sortKeys(node)) === JSON.stringify(sortKeys(logsAfter[ed.id]))) continue;
+      logsAfter[ed.id] = node;
+      const prior = changed.find((c) => c.id === ed.id);
+      if (prior) { prior.after = node; } else changed.push({ id: ed.id, before: old, after: node, op: ed.op || (ed.set.ts !== undefined ? 'edit_log' : ed.set.voided !== undefined ? 'void_log' : ed.set.review !== undefined ? 'review_log' : 'edit_log') });
+    }
+  }
+  const evAfter = logsToList(logsAfter).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+  const v = validateSeq(d, evAfter, now);
+  const ds = deriveState(sid, d, evAfter, fresh.state, now, force);
+  return { changed, evAfter, v, ds, logsAfter };
+}
+function sortKeys(o) { return Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1))); }
+
+/** รายการ audit/node ของแผน (ใช้ก่อนส่ง) */
+function planItems(plan, sid, d) {
+  const items = plan.changed.map((c) => ({ path: `logs/${d}/${sid}/${c.id}`, before: c.before, after: c.after, op: c.op }));
+  if (plan.ds.state) items.push({ path: `state/${sid}`, before: plan.stateBefore, after: plan.ds.state, op: plan.stateOp || 'set_state' });
+  return items;
+}
+
+/** อ่านสดของวัน (ไม่ใช้ค่าจาก listener) */
+async function fetchDay(sid, d) {
+  const [lg, st, dy] = await Promise.all([get(A(`logs/${d}/${sid}`)), get(A('state/' + sid)), get(A(`days/${d}/${sid}`))]);
+  return { logs: lg.val() || {}, state: st.val(), day: dy.val() };
+}
+const staffName = (sid) => ((D.staff || {})[sid] || {}).nickname || sid;
+const branchOfStaff = (sid) => ((D.staff || {})[sid] || {}).branchId;
+/** สาขาที่ใช้กับ log ที่แอดมินสร้าง: สาขาของ log app ล่าสุดในวันนั้น ไม่มีก็สาขาหลักของพนักงาน */
+function defaultBranch(sid, logsObj) {
+  const apps = logsToList(logsObj).filter((l) => l.source === 'app' && l.branchId);
+  return apps.length ? apps[apps.length - 1].branchId : branchOfStaff(sid) || Object.keys(D.branches || {})[0];
+}
+function timelineText(d, ev) {
+  return ev.length ? ev.map((e) => `${TYPE_TH[e.type]} ${fmtT(e.ts, d)}`).join(' · ') : '(ไม่มีรายการ)';
+}
+
+/**
+ * ขั้นตอนบันทึกแบบเดียวกันทุกการแก้ (ข้อ 5.5): อ่านสด -> ตรวจล็อกวัน -> validateSeq -> deriveState -> ตัวอย่าง -> withAudit -> update ครั้งเดียว
+ * คืน true เมื่อบันทึกสำเร็จ
+ * o = { sid, d, edits, op?, reason?, refId?, preview: 'always'|'warn'|'never', title, extraItems?:[], extraNodes?, approveSegmentOf?, sigCheck?: signature, stateOp? }
+ */
+async function commitDayChange(o) {
+  const { sid, d } = o;
+  let fresh;
+  try { fresh = await fetchDay(sid, d); } catch (e) { toast('อ่านข้อมูลไม่สำเร็จ: ' + (e.code || e.message)); return false; }
+  if (fresh.day && fresh.day.confirmed === true) { lockedPrompt(sid, d); return false; }
+  if (o.sig && o.sig !== daySig(fresh)) { toast('ข้อมูลเปลี่ยนระหว่างแก้ (พนักงานอาจเพิ่งกด) — โหลดข้อมูลล่าสุดแล้ว กรุณาตรวจและลองอีกครั้ง'); if (o.onStale) o.onStale(); return false; }
+  const now = serverNow();
+  const plan = planChange({ sid, d, fresh, edits: o.edits, now, force: o.forceState });
+  if (plan.error) { toast(plan.error); return false; }
+  plan.stateBefore = fresh.state; plan.stateOp = o.stateOp;
+  const problems = [...plan.v.errors];
+  if (plan.ds.error) problems.push(plan.ds.error);
+  if (o.confirmDay && !plan.v.closed) problems.push('ยืนยันวันไม่ได้: ยังไม่มีเวลาออก');
+  if (problems.length) {
+    if (o.onProblems && (await o.onProblems(problems, plan, fresh))) return 'retry';
+    openModal('บันทึกไม่ได้', [h('p', null, `${staffName(sid)} · ${dayLabel(d)}`), h('ul', null, problems.map((m) => h('li', { style: 'color:#b91c1c' }, m)))], [{ label: 'ปิด', cls: 'gray' }]);
+    return false;
+  }
+  if (!plan.changed.length && !plan.ds.state && !(o.extraItems || []).length && !o.confirmDay) { if (o.noChangeOk) return true; toast('ไม่มีอะไรเปลี่ยนแปลง'); return false; }
+  const needPreview = o.preview === 'always' || (o.preview !== 'never' && (plan.v.warnings.length || plan.ds.state));
+  if (needPreview) {
+    const beforeEv = logsToList(fresh.logs).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+    const body = [
+      h('p', null, h('b', null, staffName(sid)), ' · ', dayLabel(d)),
+      h('div', null, h('div', { class: 'muted' }, 'ก่อน'), h('div', null, timelineText(d, beforeEv))),
+      h('div', { style: 'margin-top:6px' }, h('div', { class: 'muted' }, 'หลัง'), h('div', { style: 'font-weight:700' }, timelineText(d, plan.evAfter)))
+    ];
+    if (plan.ds.state) body.push(h('div', { class: 'notice' }, 'สถานะของ ' + staffName(sid) + ' จะเป็น: ' + stateText(plan.ds.state)));
+    if (plan.ds.state && plan.ds.state.status === 'done' && plan.ds.state.workDate === bangkokDate(now)) body.push(h('div', { class: 'notice' }, `หลังบันทึก ${staffName(sid)} จะกดเข้างานวันนี้ไม่ได้อีก`));
+    if (plan.v.warnings.length) body.push(h('ul', null, plan.v.warnings.map((m) => h('li', { style: 'color:#c2410c' }, m))));
+    const ok = await new Promise((res) => openModal(o.title || 'ตรวจก่อนบันทึก', body, [{ label: 'ยกเลิก', onClick: () => res(false) }, { label: 'ยืนยันบันทึก', cls: 'blue', onClick: () => res(true) }]));
+    if (!ok) return false;
+  }
+  const items = planItems(plan, sid, d).concat(o.extraItems || []);
+  if (o.confirmDay) items.push({ path: `days/${d}/${sid}`, before: fresh.day, after: { confirmed: true, confirmedBy: uidNow, confirmedAt: serverTimestamp() }, op: 'confirm_day' });
+  const group = push(A('audit')).key;
+  const updates = withAudit({}, items, { group, refId: o.refId, reason: o.reason });
+  Object.assign(updates, o.extraNodes || {});
+  try { await update(A(''), updates); }
+  catch (e) {
+    if (e && e.code === 'PERMISSION_DENIED') toast('ข้อมูลเปลี่ยนระหว่างแก้ (พนักงานอาจเพิ่งกด) หรือวันถูกยืนยันแล้ว — ตรวจแล้วลองอีกครั้ง');
+    else toast('บันทึกไม่สำเร็จ: ' + (e.code || e.message));
+    return false;
+  }
+  T.cache = { logs: {}, days: {} };
+  refresh();
+  return true;
+}
+/** ลายเซ็นของข้อมูลวันที่ ใช้ตรวจว่าระหว่างที่ตัวแก้ไขเปิดค้างมีใครเขียนทับหรือไม่ */
+function daySig(fresh) {
+  return JSON.stringify([Object.entries(fresh.logs || {}).map(([id, l]) => [id, l.ts, l.voided === true, l.review || '']).sort(), (fresh.state || {}).lastLogId || '', (fresh.state || {}).status || '']);
+}
+
+function lockedPrompt(sid, d) {
+  openModal('วันนี้ยืนยันแล้ว', [h('p', null, `${staffName(sid)} · ${dayLabel(d)} ถูกล็อกไว้ ต้องปลดล็อกก่อนจึงแก้ได้`)], [
+    { label: 'ปิด', cls: 'gray' },
+    { label: 'ปลดล็อก', cls: 'orange', onClick: async () => { const ok = await unlockDay(sid, d); if (ok) toast('ปลดล็อกแล้ว ลองแก้อีกครั้ง'); } }
+  ]);
+}
+async function unlockDay(sid, d) {
+  try {
+    const cur = (await get(A(`days/${d}/${sid}`))).val();
+    if (!cur || cur.confirmed !== true) return true;
+    const after = { confirmed: false }; if (cur.confirmedBy) after.confirmedBy = cur.confirmedBy; if (typeof cur.confirmedAt === 'number') after.confirmedAt = cur.confirmedAt;
+    if (cur.note) after.note = cur.note;
+    const group = push(A('audit')).key;
+    await update(A(''), withAudit({}, [{ path: `days/${d}/${sid}`, before: cur, after, op: 'unlock_day' }], { group }));
+    T.cache = { logs: {}, days: {} }; refresh();
+    return true;
+  } catch (e) { toast('ปลดล็อกไม่สำเร็จ: ' + (e.code || e.message)); return false; }
+}
+/** ยืนยันหลายแถว: แถวที่ไม่ผ่านเงื่อนไขข้าม แล้วสรุป */
+async function confirmDays(rows, opts) {
+  const o = opts || {};
+  const ok = [], skipped = [];
+  const updates = {}; const group = push(A('audit')).key;
+  for (const r of rows) {
+    let fresh;
+    try { fresh = await fetchDay(r.sid, r.d); } catch (e) { skipped.push(`${staffName(r.sid)} ${dayLabel(r.d)}: อ่านข้อมูลไม่สำเร็จ`); continue; }
+    if (fresh.day && fresh.day.confirmed === true) { skipped.push(`${staffName(r.sid)} ${dayLabel(r.d)}: ยืนยันแล้ว`); continue; }
+    const ev = logsToList(fresh.logs).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+    const v = validateSeq(r.d, ev, serverNow());
+    if (v.errors.length) { skipped.push(`${staffName(r.sid)} ${dayLabel(r.d)}: ${v.errors[0]}`); continue; }
+    if (!v.closed) { skipped.push(`${staffName(r.sid)} ${dayLabel(r.d)}: ยังไม่มีเวลาออก`); continue; }
+    const pend = pendingFor(r.sid, r.d);
+    if (pend && !o.force) { r.needAsk = pend; }
+    ok.push({ r, fresh, pend });
+  }
+  const askRows = ok.filter((x) => x.pend);
+  if (askRows.length && !o.force) {
+    const go = await confirmBox('ยังมีรายการรอตรวจ', `มีรายการรอตรวจ/คำขอที่ยังไม่ตัดสินใน ${askRows.length} แถว ยืนยันต่อหรือไม่`, 'ยืนยันต่อ', 'orange');
+    if (!go) return false;
+  }
+  for (const x of ok) {
+    const after = { confirmed: true, confirmedBy: uidNow, confirmedAt: serverTimestamp() };
+    withAudit(updates, [{ path: `days/${x.r.d}/${x.r.sid}`, before: x.fresh.day, after, op: 'confirm_day' }], { group });
+  }
+  if (!ok.length) { toast('ไม่มีแถวที่ยืนยันได้\n' + skipped.join('\n')); return false; }
+  try { await update(A(''), updates); }
+  catch (e) { toast('ยืนยันไม่สำเร็จ: ' + (e.code || e.message) + ' (เช่น กะยังเปิดอยู่ หรือข้อมูลเปลี่ยน)'); return false; }
+  T.cache = { logs: {}, days: {} }; refresh();
+  if (skipped.length) toast(`ยืนยัน ${ok.length} แถว ข้าม ${skipped.length} แถว:\n` + skipped.join('\n'));
+  return true;
+}
+/** มีรายการรอตรวจหรือคำขอ pending ของวัน/คนนั้นหรือไม่ -> จำนวน */
+function pendingFor(sid, d) {
+  let n = reviewItems().filter((it) => it.sid === sid && it.d === d).length;
+  n += Object.values(D.corrPending || {}).filter((c) => c && c.staffId === sid && c.workDate === d).length;
+  return n;
+}
+
+/* เก็บ audit แบบ best-effort ของ staff/branches (ไม่บังคับใน rules) ใส่ใน update เดียวกัน */
+function bestEffortAudit(updates, path, before, after, op) {
+  const aid = push(A('audit')).key;
+  const a = { path, by: uidNow, byEmail: auth.currentUser.email, at: serverTimestamp(), op, after: clean(after) };
+  if (before) a.before = clean(before);
+  updates['audit/' + aid] = a;
+  return updates;
+}
+
+/* ====== 1. สถานะวันนี้ ====== */
 function personStatus(sid, s, today, now) {
   const st = (D.state || {})[sid];
   const grace = Number((D.settings || {}).lateGraceMin ?? 5);
@@ -348,29 +679,29 @@ function personStatus(sid, s, today, now) {
   if (!st || !st.workDate) return out;
   const live = st.status === 'working' || st.status === 'on_break';
   const stale = live && typeof st.inAt === 'number' && now - st.inAt > STALE_MS;
-  const sum = summarize(((D.logs || {})[st.workDate] || {})[sid]);
+  const sum = summarize(((D.logsWin || {})[st.workDate] || {})[sid]);
+  const seg = sum.segments[sum.segments.length - 1] || null;     // กะล่าสุดของวัน
   const yesterday = bangkokDate(now - 86400000);
   const prevShiftDone = !live && st.workDate === yesterday && sum.outTs != null && bangkokDate(sum.outTs) === today;
   const future = st.workDate > today;
   if (!live && st.workDate !== today && !prevShiftDone && !future) return out;
   if (st.lastBranchId) out.branchId = st.lastBranchId;
-  const brk = sum.breakMs + (sum.openBreak != null ? now - sum.openBreak : 0);
+  const brk = (seg ? seg.breakMs : 0) + (seg && seg.openBreak != null ? now - seg.openBreak : 0);
   const lim = Number(((D.branches || {})[out.branchId] || {}).breakLimitMin ?? 60) * 60000;
   if (sum.inTs != null && s.shiftStart) {
     const shiftMs = Date.parse(`${st.workDate}T${s.shiftStart}:00+07:00`);
     const lateMin = Math.floor((sum.inTs - shiftMs) / 60000);
     if (lateMin > grace) { out.late = true; out.tags.push({ t: `สาย ${lateMin} นาที`, c: 'late' }); }
   }
-  // เตือนเมื่อวันทำงานไม่ตรงกับเวลาจริงของ log (rules แปลง now เป็นวันที่ไม่ได้ พนักงานที่แก้โค้ดอาจเลือกวันเองได้)
-  const stale0 = live && typeof st.inAt === 'number' && now - st.inAt > STALE_MS;
-  if (future || (sum.inTs != null && bangkokDate(sum.inTs) !== st.workDate) || (live && !stale0 && !logDates.includes(st.workDate))) out.tags.push({ t: 'วันทำงานไม่ตรงกับเวลาจริง ตรวจสอบ', c: 'bad' });
+  // เตือนเมื่อวันทำงานไม่ตรงกับเวลาจริงของ in (หายเมื่อเจ้าของกด ✔ ยืนยัน) หรือ state ไม่มี log รองรับ
+  if (dateMismatch(st.workDate, sum.segments[0] ? sum.segments[0].inLog : null, now) || (live && !stale && !sum.ev.length)) out.tags.push({ t: 'วันทำงานไม่ตรงกับเวลาจริง ตรวจสอบ', c: 'bad' });
   if (sum.flags.has('suspect')) out.tags.push({ t: 'น่าสงสัย', c: 'bad' });
   else if (sum.flags.has('borderline')) out.tags.push({ t: 'ใกล้ขอบเขต', c: 'late' });
   if (stale) { out.cls = 's-stale'; out.text = 'ลืมออกงาน (เข้าเมื่อ ' + fmtTime(st.inAt) + ')'; }
-  else if (st.status === 'working') { out.cls = 's-work'; out.text = 'ทำงาน ตั้งแต่ ' + fmtTime(sum.inTs ?? st.inAt); if (sum.breakMs) out.text += ' · พักไปแล้ว ' + fmtMin(sum.breakMs / 60000); }
-  else if (st.status === 'on_break') { out.cls = 's-break' + (brk > lim ? ' over' : ''); out.text = 'พักอยู่ ' + fmtClock(now - (sum.openBreak ?? now)) + ' (รวม ' + fmtMin(brk / 60000) + ')'; }
-  else if (st.status === 'done' && sum.inTs != null && sum.outTs != null) {
-    out.cls = 's-done'; out.text = `ออกแล้ว${prevShiftDone ? ' (กะเมื่อวาน)' : ''} ${fmtTime(sum.outTs)} · สุทธิ ${fmtMin((sum.outTs - sum.inTs - sum.breakMs) / 60000)}`;
+  else if (st.status === 'working') { out.cls = 's-work'; out.text = 'ทำงาน ตั้งแต่ ' + fmtTime(seg ? seg.inTs : st.inAt); if (seg && seg.breakMs) out.text += ' · พักไปแล้ว ' + fmtMin(seg.breakMs / 60000); }
+  else if (st.status === 'on_break') { out.cls = 's-break' + (brk > lim ? ' over' : ''); out.text = 'พักอยู่ ' + fmtClock(now - ((seg && seg.openBreak) ?? now)) + ' (รวม ' + fmtMin(brk / 60000) + ')'; }
+  else if (st.status === 'done' && seg && seg.outTs != null) {
+    out.cls = 's-done'; out.text = `ออกแล้ว${prevShiftDone ? ' (กะเมื่อวาน)' : ''} ${fmtTime(seg.outTs)} · สุทธิ ${fmtMin((seg.outTs - seg.inTs - seg.breakMs) / 60000)}`;
   } else if (st.status === 'done') { out.cls = 's-done'; out.text = 'ออกแล้ว'; }
   return out;
 }
@@ -393,8 +724,8 @@ function renderToday() {
     const list = byBranch[bid]; if (!list) continue;
     list.sort((a, b) => a.s.nickname.localeCompare(b.s.nickname, 'th'));
     const grid = h('div', { class: 'grid' });
-    for (const { s, ps } of list) {
-      grid.append(h('div', { class: 'person ' + ps.cls + (ps.late ? ' late' : '') },
+    for (const { sid, s, ps } of list) {
+      grid.append(h('div', { class: 'person ' + ps.cls + (ps.late ? ' late' : ''), style: 'cursor:pointer', title: 'ดูบันทึกเวลา', onclick: () => gotoTimes(sid, today) },
         h('div', { class: 'nm' }, s.nickname),
         h('div', { class: 'tx' }, ps.text),
         ps.tags.map((t) => h('span', { class: 'tag ' + t.c }, t.t))));
@@ -402,16 +733,551 @@ function renderToday() {
     root.append(h('div', { class: 'card' }, h('h3', null, ((D.branches[bid] || {}).name) || bid), grid));
   }
 }
+function gotoTimes(sid, d, openEditor, approveId) {
+  T.mode = 'day'; T.day = d; T.sid = sid; T.onlyUnconf = false; T.sel = new Set(); T.ed = null; T.inline = null;
+  if (openEditor) openEditorFor(sid, d, approveId);
+  showTab('times');
+}
 
-/* ====== 2. รอตรวจ (คำขอผูกเครื่อง) ====== */
+/* ====== ตัวเลขบนแท็บ / แถบเตือนปฏิทิน ====== */
+function updateBadges() {
+  const reqs = Object.values(D.requests || {}).filter((r) => r && r.status === 'pending').length;
+  const corrs = Object.values(D.corrPending || {}).filter((c) => c).length;
+  const items = D.days ? reviewItems().length : 0;
+  const n = reqs + corrs + items;
+  const bd = $('#pendBadge'); bd.textContent = n; bd.classList.toggle('hidden', n === 0);
+  document.title = (n ? `(${n}) ` : '') + 'จัดการลงเวลา - อึ้งลักเส็ง';
+}
+function renderCalWarn() {
+  const el = $('#calwarn');
+  const on = !!(D.settings && D.settings.calendarEnforced === true);
+  let txt = '';
+  if (on && D.calLast !== null) {
+    const left = D.calLast ? Math.floor((Date.parse(D.calLast + 'T00:00:00+07:00') - serverNow()) / 86400000) : -1;
+    if (left < 60) txt = 'ปฏิทินใกล้หมด พนักงานจะกดเข้างานไม่ได้ — ไปที่ "ตั้งค่าสาขา" แล้วกดต่ออายุ';
+  }
+  el.textContent = txt; el.classList.toggle('hidden', !txt);
+}
+
+/* ====== 2. บันทึกเวลา ====== */
+const T = { mode: 'day', day: '', from: '', to: '', sid: 'all', inactive: false, branch: 'all', onlyUnconf: false, sel: new Set(), ed: null, inline: null, cache: { logs: {}, days: {} }, fetching: new Set() };
+const rowKey = (d, sid) => d + '|' + sid;
+const addDays = (d, n) => bangkokDate(Date.parse(d + 'T12:00:00+07:00') + n * 86400000);
+function datesInRange() {
+  const today = bangkokDate(serverNow());
+  if (!T.day) T.day = today;
+  if (!T.from) T.from = addDays(today, -6);
+  if (!T.to) T.to = today;
+  if (T.mode === 'day') return [T.day];
+  const out = []; let d = T.to;
+  for (let i = 0; i < 31 && d >= T.from; i++) { out.push(d); d = addDays(d, -1); }
+  return out;
+}
+/** logs/days ของวัน d : อยู่ในหน้าต่างใช้ listener; เก่ากว่านั้นอ่านครั้งเดียวแล้วเก็บ cache (null = กำลังโหลด) */
+const logsFor = (d) => (D.logsWin[d] ? D.logsWin[d] : d < winKey ? (T.cache.logs[d] ?? null) : {});
+const daysFor = (d) => (D.days && D.days[d] ? D.days[d] : d < winKey ? (T.cache.days[d] ?? null) : {});
+function ensureCache(dates) {
+  for (const d of dates) {
+    if (d >= winKey || T.fetching.has(d) || (T.cache.logs[d] !== undefined && T.cache.days[d] !== undefined)) continue;
+    T.fetching.add(d);
+    Promise.all([get(A('logs/' + d)), get(A('days/' + d))]).then(([l, dy]) => { T.cache.logs[d] = l.val() || {}; T.cache.days[d] = dy.val() || {}; })
+      .catch(() => { T.cache.logs[d] = {}; T.cache.days[d] = {}; })
+      .finally(() => { T.fetching.delete(d); if (curTab === 'times') renderTimes(); });
+  }
+}
+function breakPairs(ev) {
+  const out = []; let open = null;
+  for (const e of ev) {
+    if (e.type === 'break_start') open = e.ts;
+    else if (e.type === 'break_end' && open != null) { out.push([open, e.ts]); open = null; }
+    else if (e.type === 'in') open = null;
+  }
+  if (open != null) out.push([open, null]);
+  return out;
+}
+function timesRows() {
+  const dates = datesInRange();
+  ensureCache(dates);
+  const rows = []; let loading = false;
+  const staffList = Object.entries(D.staff || {}).filter(([sid, s]) => s && (T.inactive || s.active !== false) && (T.sid === 'all' || T.sid === sid));
+  for (const d of dates) {
+    const lg = logsFor(d), dy = daysFor(d);
+    if (lg === null || dy === null) { loading = true; continue; }
+    for (const [sid, s] of staffList) {
+      const raw = lg[sid] || {};
+      if (T.mode !== 'day' && !Object.keys(raw).length) continue;
+      const sum = summarize(raw);
+      const firstIn = sum.segments[0] ? sum.segments[0].inLog : null;
+      const branchId = (firstIn && firstIn.branchId) || s.branchId;
+      if (T.branch !== 'all' && T.branch !== branchId) continue;
+      const day = dy[sid] || null;
+      if (T.onlyUnconf && day && day.confirmed === true) continue;
+      rows.push({ d, sid, s, raw, sum, day, branchId });
+    }
+  }
+  rows.sort((a, b) => (a.d < b.d ? 1 : a.d > b.d ? -1 : (a.s.nickname || '').localeCompare(b.s.nickname || '', 'th')));
+  return { rows, loading };
+}
+function tagsFor(r) {
+  const tags = [], now = serverNow();
+  const grace = Number((D.settings || {}).lateGraceMin ?? 5);
+  const first = r.sum.segments[0];
+  if (first && r.s.shiftStart) {
+    const lateMin = Math.floor((first.inTs - Date.parse(`${r.d}T${r.s.shiftStart}:00+07:00`)) / 60000);
+    if (lateMin > grace) tags.push({ t: `สาย ${lateMin} นาที`, c: 'late' });
+  }
+  if (r.sum.flags.has('suspect')) tags.push({ t: 'น่าสงสัย', c: 'bad' });
+  else if (r.sum.flags.has('borderline')) tags.push({ t: 'ใกล้ขอบเขต', c: 'late' });
+  if (first && dateMismatch(r.d, first.inLog, now)) tags.push({ t: 'วันไม่ตรง', c: 'bad' });
+  const all = logsToList(r.raw);
+  if (r.sum.ev.some((l) => l.source === 'admin')) tags.push({ t: 'แอดมินบันทึก', c: '' });
+  if (all.some((l) => l.origTs !== undefined)) tags.push({ t: 'แก้เวลาแล้ว', c: '' });
+  if (all.some(isExcluded)) tags.push({ t: 'มีรายการไม่นับ', c: 'late' });
+  const lastSeg = r.sum.segments[r.sum.segments.length - 1];
+  if (lastSeg && lastSeg.outTs == null) tags.push({ t: 'ไม่มีเวลาออก', c: 'late' });
+  const pc = Object.values(D.corrPending || {}).filter((c) => c && c.staffId === r.sid && c.workDate === r.d).length;
+  if (pc) tags.push({ t: `คำขอรอ ${pc}`, c: 'late' });
+  return tags;
+}
+
+function renderTimes(force) {
+  const root = $('#p-times');
+  if (!force && (T.ed || T.inline)) return;          // ไม่วาดทับขณะกำลังแก้
+  if (!D.staff || !D.branches || !D.state || D.days === null || !D.settings) return;
+  clear(root);
+  root.append(h('h3', null, 'บันทึกเวลา'));
+  const today = bangkokDate(serverNow());
+  datesInRange();
+  // ----- ตัวกรอง -----
+  const mk = (tag, attrs) => h(tag, attrs);
+  const mode = h('select', { id: 'fMode' }, h('option', { value: 'day' }, 'วันเดียว'), h('option', { value: 'range' }, 'ช่วงวัน'));
+  mode.value = T.mode;
+  const day = h('input', { type: 'date', id: 'fDay', '.value': T.day });
+  const from = h('input', { type: 'date', id: 'fFrom', '.value': T.from });
+  const to = h('input', { type: 'date', id: 'fTo', '.value': T.to });
+  const sidSel = h('select', { id: 'fStaff' }, h('option', { value: 'all' }, 'ทุกคน'),
+    Object.entries(D.staff).filter(([, s]) => s && (T.inactive || s.active !== false)).sort((a, b) => (a[1].nickname || '').localeCompare(b[1].nickname || '', 'th')).map(([sid, s]) => h('option', { value: sid }, s.nickname)));
+  sidSel.value = T.sid;
+  const brSel = h('select', { id: 'fBranch' }, h('option', { value: 'all' }, 'ทุกสาขา'), Object.entries(D.branches).map(([bid, b]) => h('option', { value: bid }, b.name || bid)));
+  brSel.value = T.branch;
+  const inact = h('input', { type: 'checkbox', id: 'fInactive', '.checked': T.inactive });
+  const only = h('input', { type: 'checkbox', id: 'fOnly', '.checked': T.onlyUnconf });
+  const apply = () => { T.mode = mode.value; T.day = day.value || today; T.from = from.value; T.to = to.value; T.sid = sidSel.value; T.branch = brSel.value; T.inactive = inact.checked; T.onlyUnconf = only.checked; T.sel = new Set(); T.ed = null; renderTimes(true); };
+  for (const e of [mode, day, from, to, sidSel, brSel, inact, only]) e.addEventListener('change', apply);
+  const quick = (label, fn) => h('button', { class: 'btn small gray', type: 'button', onclick: () => { fn(); T.sel = new Set(); T.ed = null; renderTimes(true); } }, label);
+  const monthStart = today.slice(0, 8) + '01';
+  root.append(h('div', { class: 'card' },
+    h('div', { class: 'row' },
+      h('label', null, 'โหมด', mode),
+      T.mode === 'day' ? h('label', null, 'วันที่', day) : [h('label', null, 'จาก', from), h('label', null, 'ถึง (ไม่เกิน 31 วัน)', to)],
+      h('label', null, 'พนักงาน', sidSel), h('label', null, 'สาขา', brSel),
+      h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, inact, 'รวมคนที่ปิดบัญชี'),
+      h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, only, 'เฉพาะที่ยังไม่ยืนยัน')),
+    h('div', { class: 'row' },
+      quick('วันนี้', () => { T.mode = 'day'; T.day = today; }), quick('เมื่อวาน', () => { T.mode = 'day'; T.day = addDays(today, -1); }),
+      quick('7 วัน', () => { T.mode = 'range'; T.from = addDays(today, -6); T.to = today; }),
+      quick('เดือนนี้', () => { T.mode = 'range'; T.from = monthStart; T.to = today; }))));
+  const { rows, loading } = timesRows();
+  const selCount = [...T.sel].filter((k) => rows.some((r) => rowKey(r.d, r.sid) === k)).length;
+  root.append(h('div', { class: 'row' },
+    h('button', { class: 'btn', id: 'addDayBtn', onclick: openAddDay }, '+ เพิ่มวันทำงาน'),
+    h('button', { class: 'btn blue', id: 'confSelBtn', disabled: selCount === 0, onclick: () => confirmDays(rows.filter((r) => T.sel.has(rowKey(r.d, r.sid))).map((r) => ({ d: r.d, sid: r.sid }))) }, `ยืนยันที่เลือก (${selCount})`)));
+  if (loading) root.append(h('div', { class: 'muted' }, 'กำลังโหลดข้อมูลย้อนหลัง...'));
+
+  // ----- ตาราง -----
+  const tb = h('tbody');
+  const heads = ['', 'วันที่', 'ชื่อ', 'สาขา', 'เข้า', 'พัก', 'ออก', 'พักรวม', 'สุทธิ', 'ป้าย', 'สถานะวัน', ''];
+  if (!rows.length && !loading) tb.append(h('tr', null, h('td', { colspan: heads.length, class: 'muted' }, 'ไม่มีข้อมูลตามตัวกรองนี้')));
+  for (const r of rows) {
+    const key = rowKey(r.d, r.sid);
+    const locked = !!(r.day && r.day.confirmed === true);
+    const segs = r.sum.segments, first = segs[0], last = segs[segs.length - 1];
+    const brkTxt = breakPairs(r.sum.ev).map(([a, b]) => `${fmtTime(a)}–${b == null ? '…' : fmtTime(b)}`).join(', ');
+    const dbl = (which) => (locked ? undefined : () => startInline(key, which));
+    const timeCell = (which, ts) => {
+      const td = h('td', { class: 'tcell', 'data-which': which, title: locked ? '' : 'ดับเบิลคลิกเพื่อแก้', ondblclick: dbl(which) });
+      if (T.inline && T.inline.key === key && T.inline.which === which) {
+        const inp = h('input', { type: 'time', class: 'inl', '.value': ts != null ? fmtTime(ts) : '' });
+        inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); inlineSave(r, which, inp.value); } else if (ev.key === 'Escape') { T.inline = null; renderTimes(true); } });
+        td.append(inp); setTimeout(() => inp.focus(), 0);
+      } else td.append(ts != null ? fmtT(ts, r.d) : '—');
+      return td;
+    };
+    const dayTxt = locked ? `🔒 ยืนยันแล้ว${r.day.confirmedAt ? ' ' + fmtTime(r.day.confirmedAt) : ''}` : 'ยังไม่ยืนยัน';
+    tb.append(h('tr', { class: locked ? 'locked' : '', 'data-key': key },
+      h('td', null, h('input', { type: 'checkbox', class: 'rsel', '.checked': T.sel.has(key), onchange: (e) => { if (e.target.checked) T.sel.add(key); else T.sel.delete(key); renderTimes(true); } })),
+      h('td', null, dayLabel(r.d)), h('td', null, h('b', null, r.s.nickname)),
+      h('td', null, (D.branches[r.branchId] || {}).name || r.branchId || ''),
+      timeCell('in', first ? first.inTs : null), h('td', null, brkTxt || '—'),
+      timeCell('out', last ? last.outTs : null),
+      h('td', null, r.sum.breakMs ? fmtMin(r.sum.breakMs / 60000) : '—'),
+      h('td', null, segs.some((g) => g.outTs != null) ? fmtMin(r.sum.netMs / 60000) : '—'),
+      h('td', null, tagsFor(r).map((t) => h('span', { class: 'tag ' + t.c }, t.t))),
+      h('td', { class: 'dstat' }, dayTxt),
+      h('td', null, h('div', { class: 'row', style: 'margin:0;gap:4px' },
+        h('button', { class: 'btn small blue btn-edit', disabled: locked, onclick: () => openEditorFor(r.sid, r.d) }, 'แก้'),
+        !locked && h('button', { class: 'btn small btn-conf', onclick: () => confirmDays([{ d: r.d, sid: r.sid }]) }, 'ยืนยัน'),
+        locked && h('button', { class: 'btn small orange btn-unlock', onclick: async () => { if (await confirmBox('ปลดล็อก', `ปลดล็อก ${r.s.nickname} ${dayLabel(r.d)} เพื่อแก้ไข?`, 'ปลดล็อก', 'orange')) unlockDay(r.sid, r.d); } }, 'ปลดล็อก'),
+        h('button', { class: 'btn small gray btn-hist', onclick: () => showHistory(r.d, r.sid) }, 'ประวัติ')))));
+    if (T.ed && T.ed.key === key) {
+      const edRow = h('tr', { class: 'edrow' }, h('td', { colspan: heads.length }, buildEditor()));
+      tb.append(edRow);
+    }
+  }
+  root.append(h('div', { style: 'overflow:auto' }, h('table', { id: 'timesTable' }, h('thead', null, h('tr', null, heads.map((t) => h('th', null, t)))), tb)));
+  if (T.ed) updateEditorFeedback();
+}
+function startInline(key, which) { T.inline = { key, which }; T.ed = null; renderTimes(true); }
+async function inlineSave(r, which, val) {
+  if (!/^\d\d:\d\d$/.test(val)) { toast('ใส่เวลาให้ถูกต้อง'); return; }
+  const d = r.d, sid = r.sid, segs = r.sum.segments;
+  let edits;
+  if (which === 'in') {
+    const seg = segs[0];
+    if (seg) { if (val === fmtTime(seg.inTs)) { T.inline = null; renderTimes(true); return; } edits = [{ id: seg.inLog.id, set: { ts: tsOf(d, val, false) } }]; }
+    else edits = [{ create: { type: 'in', ts: tsOf(d, val, false), branchId: defaultBranch(sid, r.raw) } }];
+  } else {
+    const seg = segs[segs.length - 1];
+    if (!seg) { toast('ต้องมีเวลาเข้างานก่อน'); return; }
+    const plus = val < fmtTime(seg.inTs);
+    if (seg.outLog) { if (val === fmtTime(seg.outTs)) { T.inline = null; renderTimes(true); return; } edits = [{ id: seg.outLog.id, set: { ts: tsOf(d, val, plus) } }]; }
+    else edits = [{ create: { type: 'out', ts: tsOf(d, val, plus), branchId: defaultBranch(sid, r.raw) } }];
+  }
+  const ok = await commitDayChange({ sid, d, edits, preview: 'warn', title: 'แก้เวลา' });
+  if (ok) { T.inline = null; renderTimes(true); }
+}
+
+/* ----- ตัวแก้ไขวัน ----- */
+async function openEditorFor(sid, d, approveId) {
+  let fresh;
+  try { fresh = await fetchDay(sid, d); } catch (e) { toast('อ่านข้อมูลไม่สำเร็จ: ' + (e.code || e.message)); return; }
+  if (fresh.day && fresh.day.confirmed === true) { lockedPrompt(sid, d); return; }
+  T.inline = null;
+  T.ed = { key: rowKey(d, sid), sid, d, fresh, sig: daySig(fresh), rows: [], reason: '', approveId: approveId || null };
+  for (const l of logsToList(fresh.logs)) {
+    if (typeof l.ts !== 'number') continue;
+    T.ed.rows.push({ id: l.id, src: l, type: l.type, hhmm: fmtTime(l.ts), plus: plusDayOf(d, l.ts), origHH: fmtTime(l.ts), origPlus: plusDayOf(d, l.ts), branchId: l.branchId, voided: l.voided === true, restore: false, note: l.note || '' });
+  }
+  if (curTab !== 'times') showTab('times'); else renderTimes(true);
+  setTimeout(() => { const el = document.querySelector('.edrow'); if (el) el.scrollIntoView({ block: 'nearest' }); }, 50);
+}
+function rowsToEdits(ed) {
+  const d = ed.d, edits = [];
+  for (const r of ed.rows) {
+    if (!r.id) {
+      if (!/^\d\d:\d\d$/.test(r.hhmm)) continue;
+      const create = { type: r.type, ts: tsOf(d, r.hhmm, r.plus), branchId: r.branchId };
+      if (r.note) create.note = r.note;
+      edits.push({ create });
+      continue;
+    }
+    const set = {}, src = r.src;
+    if (r.hhmm !== r.origHH || r.plus !== r.origPlus) { if (/^\d\d:\d\d$/.test(r.hhmm)) set.ts = tsOf(d, r.hhmm, r.plus); }
+    if (r.voided !== (src.voided === true)) set.voided = r.voided;
+    if (r.restore && src.review === 'rejected') set.review = 'approved';
+    if (src.source === 'admin') { if (r.type !== src.type) set.type = r.type; if (r.branchId !== src.branchId) set.branchId = r.branchId; }
+    if ((r.note || '') !== (src.note || '')) set.note = r.note || null;
+    if (ed.approveId && r.id === ed.approveId && src.review !== 'approved' && !r.voided && !(src.review === 'rejected' && !r.restore)) set.review = 'approved';
+    if (Object.keys(set).length) edits.push({ id: r.id, set });
+  }
+  return edits;
+}
+function edPlan() {
+  const ed = T.ed;
+  return planChange({ sid: ed.sid, d: ed.d, fresh: ed.fresh, edits: rowsToEdits(ed), now: serverNow() });
+}
+function updateEditorFeedback() {
+  const box = document.getElementById('edFeedback'); if (!box || !T.ed) return;
+  clear(box);
+  const plan = edPlan();
+  if (plan.error) { box.append(h('div', { class: 'err' }, plan.error)); return; }
+  const errs = [...plan.v.errors]; if (plan.ds.error) errs.push(plan.ds.error);
+  for (const m of errs) box.append(h('div', { class: 'edErr', style: 'color:#b91c1c;font-weight:600' }, '✘ ' + m));
+  for (const m of plan.v.warnings) box.append(h('div', { class: 'edWarn', style: 'color:#c2410c' }, '⚠ ' + m));
+  if (plan.ds.state) box.append(h('div', { class: 'notice' }, `สถานะของ ${staffName(T.ed.sid)} จะเปลี่ยนเป็น: ${stateText(plan.ds.state)}`));
+  const s = $('#edSave'), s2 = $('#edSaveConf');
+  const bad = errs.length > 0;
+  if (s) s.disabled = bad; if (s2) s2.disabled = bad || !plan.v.closed;
+  // state ไม่ตรงกับ log -> ปุ่มซ่อมสถานะ
+  const cur = T.ed.fresh.state;
+  if (cur && cur.workDate === T.ed.d) {
+    const ev = logsToList(T.ed.fresh.logs).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+    const fix = deriveState(T.ed.sid, T.ed.d, ev, cur, serverNow());
+    if (fix.state && !rowsToEdits(T.ed).length) box.append(h('div', { class: 'notice' }, 'สถานะของพนักงานไม่ตรงกับบันทึกของวันนี้: ' + stateText(fix.state) + ' ',
+      h('button', { class: 'btn small orange', id: 'edRebuild', onclick: () => rebuildStateFor(T.ed.sid, T.ed.d) }, 'ซ่อมสถานะ')));
+  }
+}
+function buildEditor() {
+  const ed = T.ed;
+  const wrap = h('div', { class: 'editor card' });
+  wrap.append(h('b', null, `แก้ไข ${staffName(ed.sid)} · ${dayLabel(ed.d)}`));
+  const tb = h('tbody');
+  const typeOpts = (sel, dis) => { const s = h('select', { disabled: dis }, Object.entries(TYPE_TH).map(([k, v]) => h('option', { value: k }, v))); s.value = sel; return s; };
+  const brOpts = (sel, dis) => { const s = h('select', { disabled: dis }, Object.entries(D.branches).map(([bid, b]) => h('option', { value: bid }, b.name || bid))); s.value = sel; return s; };
+  ed.rows.forEach((r, i) => {
+    const src = r.src, isApp = src && src.source === 'app';
+    const excluded = r.voided || (src && src.review === 'rejected' && !r.restore);
+    const tIn = h('input', { type: 'time', class: 'edt', '.value': r.hhmm });
+    const pl = h('input', { type: 'checkbox', '.checked': r.plus });
+    const tSel = typeOpts(r.type, !!isApp);
+    const bSel = brOpts(r.branchId, !!isApp);
+    const note = h('input', { type: 'text', maxlength: 200, size: 16, '.value': r.note, placeholder: 'หมายเหตุ' });
+    tIn.addEventListener('input', () => {
+      r.hhmm = tIn.value;
+      // ตั้ง +1 วันอัตโนมัติเมื่อเวลาน้อยกว่าเวลาเข้างาน
+      const f = ed.rows.find((x) => x.type === 'in' && x !== r && !x.voided && /^\d\d:\d\d$/.test(x.hhmm));
+      if (r.type !== 'in' && f && /^\d\d:\d\d$/.test(r.hhmm)) { r.plus = r.hhmm < f.hhmm; pl.checked = r.plus; }
+      updateEditorFeedback();
+    });
+    pl.addEventListener('change', () => { r.plus = pl.checked; updateEditorFeedback(); });
+    tSel.addEventListener('change', () => { r.type = tSel.value; updateEditorFeedback(); });
+    bSel.addEventListener('change', () => { r.branchId = bSel.value; updateEditorFeedback(); });
+    note.addEventListener('input', () => { r.note = note.value.trim(); updateEditorFeedback(); });
+    let from = '—';
+    if (isApp) from = `เครื่องพนักงาน ±${src.accuracy} ม. ห่าง ${src.distance} ม.`;
+    else if (src && src.source === 'admin') from = 'แอดมินบันทึก';
+    else if (!src) from = 'เพิ่มใหม่';
+    const origNote = src && src.origTs !== undefined && (r.hhmm !== r.origHH || r.plus !== r.origPlus || true) ? h('div', { class: 'muted' }, `เดิม ${fmtT(src.origTs, ed.d)} (เวลาจริงจากเซิร์ฟเวอร์)`) : null;
+    const flagTags = src && src.flag ? [h('span', { class: 'tag ' + (src.flag === 'suspect' ? 'bad' : 'late') }, flagThai(src))] : [];
+    if (src && src.review) flagTags.push(h('span', { class: 'tag ' + (src.review === 'approved' ? 'ok' : 'bad') }, src.review === 'approved' ? 'ยืนยันแล้ว' : 'ไม่ยืนยัน'));
+    const act = !src ? h('button', { class: 'btn small red', onclick: () => { ed.rows.splice(i, 1); renderTimes(true); } }, 'เอาออก')
+      : (r.voided || (src.review === 'rejected' && !r.restore))
+        ? h('button', { class: 'btn small blue', onclick: () => { if (r.voided) r.voided = false; else r.restore = true; renderTimes(true); } }, 'กู้คืน')
+        : h('button', { class: 'btn small red', onclick: () => { r.voided = true; renderTimes(true); } }, 'ยกเลิกรายการ');
+    tb.append(h('tr', { class: 'edr' + (excluded ? ' struck' : ''), 'data-id': r.id || '' }, h('td', null, tSel), h('td', null, tIn), h('td', null, pl), h('td', null, bSel), h('td', null, from, origNote), h('td', null, flagTags), h('td', null, note), h('td', null, act)));
+  });
+  wrap.append(h('table', { class: 'edtable' }, h('thead', null, h('tr', null, ['ประเภท', 'เวลา', '+1 วัน', 'สาขา', 'ที่มา', 'ธง', 'หมายเหตุ', ''].map((t) => h('th', null, t)))), tb));
+  wrap.append(h('div', { class: 'row' }, h('button', { class: 'btn small gray', id: 'edAdd', onclick: () => {
+    const evs = ed.rows.filter((r) => !r.voided && !(r.src && r.src.review === 'rejected' && !r.restore));
+    const lastT = evs.length ? evs[evs.length - 1].type : null;
+    const guess = { null: 'in', in: 'break_start', break_start: 'break_end', break_end: 'out', out: 'in' }[lastT];
+    const br = defaultBranch(ed.sid, ed.fresh.logs);
+    ed.rows.push({ id: null, src: null, type: guess, hhmm: '', plus: false, origHH: '', origPlus: false, branchId: br, voided: false, restore: false, note: '' });
+    renderTimes(true);
+  } }, '+ เพิ่มรายการ')));
+  const reason = h('input', { type: 'text', maxlength: 300, size: 40, id: 'edReason', placeholder: 'เหตุผลการแก้ (ไม่บังคับ)', '.value': ed.reason });
+  reason.addEventListener('input', () => { ed.reason = reason.value; });
+  const quick = ['ลืมกด', 'แก้ตามที่พนักงานแจ้ง', 'เครื่องมีปัญหา', 'กดผิด'].map((t) => h('button', { class: 'btn small gray', type: 'button', onclick: () => { ed.reason = t; reason.value = t; } }, t));
+  wrap.append(h('div', { class: 'row' }, h('label', null, 'เหตุผลการแก้', reason), quick));
+  wrap.append(h('div', { id: 'edFeedback' }));
+  wrap.append(h('div', { class: 'row' },
+    h('button', { class: 'btn', id: 'edSave', onclick: () => saveEditor(false) }, 'บันทึก'),
+    h('button', { class: 'btn blue', id: 'edSaveConf', onclick: () => saveEditor(true) }, 'บันทึกและยืนยันวัน'),
+    h('button', { class: 'btn gray', id: 'edCancel', onclick: () => { T.ed = null; renderTimes(true); } }, 'ยกเลิก')));
+  return wrap;
+}
+function flagThai(l) {
+  const rs = String(l.flagReason || '').split(',');
+  if (l.flag === 'borderline') return rs[0] === 'acc' ? 'สัญญาณตำแหน่งไม่ชัด' : 'อยู่นอกรัศมีเล็กน้อย';
+  return rs.map((x) => ({ acc: 'ความแม่นยำสูงผิดปกติ (< 3 ม.) อาจใช้แอปปลอมตำแหน่ง', same: 'พิกัดซ้ำกับครั้งก่อนทุกหลัก', hop: 'กดต่างสาขาภายใน 10 นาที' }[x] || x)).join(' · ');
+}
+async function saveEditor(andConfirm) {
+  const ed = T.ed; if (!ed) return;
+  const ok = await commitDayChange({
+    sid: ed.sid, d: ed.d, edits: rowsToEdits(ed), reason: ed.reason.trim(), preview: 'warn', title: 'ตรวจก่อนบันทึก', sig: ed.sig, confirmDay: andConfirm, noChangeOk: false,
+    onStale: () => openEditorFor(ed.sid, ed.d, ed.approveId)
+  });
+  if (ok) { T.ed = null; renderTimes(true); }
+}
+async function rebuildStateFor(sid, d) {
+  const ok = await commitDayChange({ sid, d, edits: [], preview: 'always', title: 'ซ่อมสถานะ', stateOp: 'rebuild_state', forceState: true });
+  if (ok) { if (T.ed) { T.ed = null; } renderTimes(true); }
+}
+
+/* ----- เพิ่มวันทำงาน ----- */
+function openAddDay() {
+  const today = bangkokDate(serverNow());
+  const staffSel = h('select', { id: 'adStaff' }, Object.entries(D.staff).filter(([, s]) => s && s.active !== false).sort((a, b) => (a[1].nickname || '').localeCompare(b[1].nickname || '', 'th')).map(([sid, s]) => h('option', { value: sid }, s.nickname)));
+  if (T.sid !== 'all' && staffSel.querySelector(`option[value="${CSS.escape(T.sid)}"]`)) staffSel.value = T.sid;
+  const date = h('input', { type: 'date', id: 'adDate', '.value': T.mode === 'day' ? T.day : today });
+  const tin = h('input', { type: 'time', id: 'adIn', '.value': '08:00' });
+  const tout = h('input', { type: 'time', id: 'adOut', '.value': '17:00' });
+  const plus = h('input', { type: 'checkbox', id: 'adPlus' });
+  const brk = [0, 1, 2].map((i) => ({ a: h('input', { type: 'time', class: 'adB' }), b: h('input', { type: 'time', class: 'adB' }) }));
+  const brSel = h('select', { id: 'adBranch' }, Object.entries(D.branches).map(([bid, b]) => h('option', { value: bid }, b.name || bid)));
+  const sync = () => { const s = (D.staff[staffSel.value] || {}).branchId; if (s) brSel.value = s; };
+  staffSel.addEventListener('change', sync); sync();
+  const reason = h('input', { type: 'text', id: 'adReason', maxlength: 300, size: 36, placeholder: 'เช่น ลืมกด / พนักงานแจ้ง' });
+  const err = h('div', { class: 'err', id: 'adErr' });
+  openModal('เพิ่มวันทำงาน', [
+    h('div', { class: 'row' }, h('label', null, 'พนักงาน', staffSel), h('label', null, 'วันที่เริ่มกะ', date), h('label', null, 'สาขา', brSel)),
+    h('div', { class: 'row' }, h('label', null, 'เข้า', tin), h('label', null, 'ออก', tout), h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, plus, 'ออกหลังเที่ยงคืน (+1 วัน)')),
+    h('div', { class: 'muted' }, 'พัก (ไม่บังคับ 0–3 ช่วง)'),
+    brk.map((p) => h('div', { class: 'row' }, h('label', null, 'เริ่มพัก', p.a), h('label', null, 'กลับ', p.b))),
+    h('div', { class: 'row' }, h('label', null, 'เหตุผล', reason)), err
+  ], [
+    { label: 'ยกเลิก' },
+    { label: 'เพิ่ม', cls: 'blue', onClick: async () => {
+      err.textContent = '';
+      const d = date.value, sid = staffSel.value;
+      if (!d || !sid) { err.textContent = 'เลือกพนักงานและวันที่'; return false; }
+      if (!tin.value || !tout.value) { err.textContent = 'ใส่เวลาเข้าและออก'; return false; }
+      const mkc = (type, hhmm, p) => ({ create: { type, ts: tsOf(d, hhmm, p), branchId: brSel.value } });
+      const inMin = tin.value;
+      const edits = [mkc('in', tin.value, false)];
+      for (const p of brk) {
+        if (!p.a.value && !p.b.value) continue;
+        if (!p.a.value || !p.b.value) { err.textContent = 'ช่วงพักต้องใส่ทั้งเริ่มและกลับ'; return false; }
+        edits.push(mkc('break_start', p.a.value, p.a.value < inMin), mkc('break_end', p.b.value, p.b.value < inMin));
+      }
+      edits.push(mkc('out', tout.value, plus.checked || tout.value < inMin));
+      closeModal();
+      const ok = await commitDayChange({ sid, d, edits, reason: reason.value.trim(), preview: 'always', title: 'เพิ่มวันทำงาน' });
+      if (ok) { gotoTimes(sid, d); }
+      return false;
+    } }
+  ]);
+}
+
+/* ----- ประวัติการแก้ ----- */
+const OP_TH = { edit_log: 'แก้เวลา', add_log: 'เพิ่มรายการ', void_log: 'ยกเลิก/กู้คืนรายการ', review_log: 'ตรวจรายการ', move_log: 'ย้ายวัน', set_state: 'ปรับสถานะ', rebuild_state: 'ซ่อมสถานะ', confirm_day: 'ยืนยันวัน', unlock_day: 'ปลดล็อก', decide_correction: 'ตัดสินคำขอ', edit_staff: 'แก้ข้อมูลพนักงาน', edit_branch: 'แก้ข้อมูลสาขา' };
+function auditDetail(a) {
+  const b = a.before || {}, f = a.after || {};
+  if (a.path.startsWith('logs/')) {
+    const bits = [`${TYPE_TH[f.type] || f.type || ''} ${typeof f.ts === 'number' ? fmtTime(f.ts) : ''}`];
+    if (a.before && typeof b.ts === 'number' && b.ts !== f.ts) bits.push(`(เดิม ${fmtTime(b.ts)})`);
+    if (f.voided === true) bits.push('ยกเลิก'); else if (b.voided === true) bits.push('กู้คืน');
+    if (f.review && f.review !== b.review) bits.push(f.review === 'approved' ? 'ยืนยัน' : 'ไม่ยืนยัน');
+    if (!a.before) bits.push('(สร้างใหม่)');
+    return bits.join(' ');
+  }
+  if (a.path.startsWith('days/')) return f.confirmed ? 'ยืนยันวัน' : 'ปลดล็อกวัน';
+  if (a.path.startsWith('state/')) return `สถานะ → ${f.status || ''}`;
+  return a.path;
+}
+async function showHistory(d, sid) {
+  const P = `logs/${d}/${sid}/`;
+  const byPath = (a, b) => get(query(A('audit'), orderByChild('path'), startAt(a), endAt(b)));
+  let entries = [];
+  try {
+    const [l, dy, st] = await Promise.all([byPath(P, P + '\uf8ff'), byPath(`days/${d}/${sid}`, `days/${d}/${sid}`), byPath(`state/${sid}`, `state/${sid}`)]);
+    const own = [...Object.values(l.val() || {}), ...Object.values(dy.val() || {})];
+    const groups = new Set(own.map((a) => a.group).filter(Boolean));
+    entries = [...own, ...Object.values(st.val() || {}).filter((a) => a.group && groups.has(a.group))];
+  } catch (e) { toast('อ่านประวัติไม่สำเร็จ: ' + (e.code || e.message)); return; }
+  entries.sort((a, b) => (a.at || 0) - (b.at || 0));
+  const tb = h('tbody');
+  if (!entries.length) tb.append(h('tr', null, h('td', { colspan: 5, class: 'muted' }, 'ยังไม่มีประวัติการแก้')));
+  for (const a of entries) tb.append(h('tr', { class: 'histrow' }, h('td', null, `${bangkokDate(a.at)} ${fmtTime(a.at)}`), h('td', null, a.byEmail || a.by), h('td', null, OP_TH[a.op] || a.op || ''), h('td', null, auditDetail(a)), h('td', null, a.reason || '')));
+  openModal(`ประวัติ ${staffName(sid)} · ${dayLabel(d)}`, [h('div', { style: 'max-height:60vh;overflow:auto' }, h('table', { id: 'histTable' }, h('thead', null, h('tr', null, ['เวลา', 'ผู้แก้', 'การกระทำ', 'รายละเอียด', 'เหตุผล'].map((t) => h('th', null, t)))), tb)), ], [{ label: 'ปิด', cls: 'gray' }]);
+}
+
+/* ====== 3. รอตรวจ ====== */
+let reviewMap = null, reviewLayer = null, selectedKey = null;
+
+/** รายการที่ต้องตรวจ (ข้อ 8.1.1) สร้างจาก D.logsWin / D.state / D.days ข้ามวันที่ยืนยันแล้ว */
+function reviewItems() {
+  if (!D.days || !D.state || !D.staff) return [];
+  const now = serverNow(), today = bangkokDate(now);
+  const items = new Map();
+  const add = (d, sid, log, kind, reason) => {
+    const key = `${d}|${sid}|${log.id}`;
+    let it = items.get(key);
+    if (!it) { it = { key, d, sid, id: log.id, log, kinds: new Set(), reasons: [] }; items.set(key, it); }
+    it.kinds.add(kind); it.reasons.push(reason);
+  };
+  for (const d of Object.keys(D.logsWin).sort().reverse()) {
+    const per = D.logsWin[d] || {};
+    for (const sid of Object.keys(per)) {
+      if (((D.days[d] || {})[sid] || {}).confirmed === true) continue;
+      const sum = summarize(per[sid]);
+      const st = D.state[sid];
+      for (const e of sum.ev) if (e.flag && !e.review) add(d, sid, e, 'flag', { c: e.flag === 'suspect' ? 'bad' : 'late', t: flagThai(e) });
+      sum.segments.forEach((g, i) => {
+        if (dateMismatch(d, g.inLog, now)) add(d, sid, g.inLog, 'mismatch', { c: 'bad', t: `บันทึกเป็นวันที่ ${d} แต่เวลาจริงคือ ${bangkokDate(g.inLog.ts)} ${fmtTime(g.inLog.ts)}` });
+        if (g.outTs != null && g.outTs - g.inTs > LONG_SHIFT_MS && !g.outLog.review) add(d, sid, g.outLog, 'long', { c: 'late', t: `ทำงาน ${fmtMin((g.outTs - g.inTs) / 60000)} (ยาวผิดปกติ)` });
+        if (g.outTs == null) {
+          const live = st && st.workDate === d && (st.status === 'working' || st.status === 'on_break');
+          const stale = live && typeof st.inAt === 'number' && now - st.inAt > STALE_MS;
+          if (i < sum.segments.length - 1 || !live || stale) add(d, sid, g.inLog, 'forgot', { c: 'bad', t: `เข้า ${fmtTime(g.inTs)} ไม่มีเวลาออก` });
+        }
+      });
+    }
+  }
+  const list = [...items.values()];
+  for (const [sid, st] of Object.entries(D.state || {})) {
+    if (!st || !st.workDate || !D.staff[sid] || D.staff[sid].active === false) continue;
+    const live = st.status === 'working' || st.status === 'on_break';
+    if ((live && (st.workDate < bangkokDate(now - 86400000) || st.workDate > today)) || st.workDate > today) {
+      list.push({ key: 'anomaly|' + sid, d: st.workDate, sid, id: null, log: null, kinds: new Set(['anomaly']), reasons: [{ c: 'bad', t: `สถานะอ้างวันที่ ${st.workDate} (${st.status})` }] });
+    }
+  }
+  list.sort((a, b) => (a.d < b.d ? 1 : a.d > b.d ? -1 : (staffName(a.sid) || '').localeCompare(staffName(b.sid) || '', 'th')));
+  return list;
+}
+
+function ensureReviewMap(wrap) {
+  if (reviewMap) return;
+  const div = h('div', { id: 'rvMap', class: 'map', style: 'height:420px' });
+  wrap.prepend(div);
+  reviewMap = L.map(div).setView([13.0, 101.0], 6);
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 18, attribution: 'Imagery &copy; Esri' }).addTo(reviewMap);
+  reviewLayer = L.layerGroup().addTo(reviewMap);
+}
+function showOnMap(it) {
+  selectedKey = it.key;
+  document.querySelectorAll('#rvList .rvcard').forEach((el) => el.classList.toggle('sel', el.dataset.key === it.key));
+  const cap = $('#rvCap'); if (!cap || !reviewMap) return;
+  reviewMap.invalidateSize();
+  reviewLayer.clearLayers();
+  const l = it.log;
+  if (!l || typeof l.lat !== 'number') { cap.textContent = l ? 'ไม่มีพิกัด (เจ้าของบันทึกแทน)' : 'ไม่มีพิกัด'; return; }
+  const b = (D.branches || {})[l.branchId] || {};
+  const bounds = [];
+  if (typeof b.lat === 'number' && typeof b.lng === 'number') {
+    const R = Number(b.radius) || 10, g = Number(b.graceFactor) || 2;
+    L.circle([b.lat, b.lng], { radius: R, color: '#16a34a', fillOpacity: .1 }).addTo(reviewLayer);
+    const o = L.circle([b.lat, b.lng], { radius: R * g, color: '#ea580c', dashArray: '6 6', fill: false }).addTo(reviewLayer);
+    bounds.push(o.getBounds());
+  }
+  L.marker([l.lat, l.lng]).addTo(reviewLayer);
+  if (typeof l.accuracy === 'number') { const a = L.circle([l.lat, l.lng], { radius: l.accuracy, color: '#2563eb', weight: 1, fillOpacity: .15 }).addTo(reviewLayer); bounds.push(a.getBounds()); }
+  bounds.push(L.latLngBounds([l.lat, l.lng], [l.lat, l.lng]));
+  let box = bounds[0]; for (const x of bounds.slice(1)) box = box.extend(x);
+  reviewMap.fitBounds(box.pad(0.2), { maxZoom: 19 });
+  let nowDist = '';
+  if (typeof b.lat === 'number') {
+    const d0 = haversineM(l.lat, l.lng, b.lat, b.lng);
+    nowDist = ` · เทียบตำแหน่งร้านปัจจุบัน ${Math.round(d0)} ม.`;
+  }
+  cap.textContent = `ระยะตอนกด ${l.distance ?? '-'} ม. · ความแม่นยำ ±${l.accuracy ?? '-'} ม.${nowDist}`;
+}
+function haversineM(la1, ln1, la2, ln2) {
+  const R = 6371008.8, r = Math.PI / 180, dLa = (la2 - la1) * r, dLn = (ln2 - ln1) * r;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLn / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
 function renderPending() {
   const root = $('#p-pending');
-  if (!D.requests || !D.staff || !D.secret) return;
-  clear(root);
-  root.append(h('h3', null, 'รอตรวจ'));
-  root.append(h('h4', null, 'คำขอผูกเครื่อง'));
+  if (!D.requests || !D.staff || !D.secret || !D.days || !D.state || !D.branches) return;
+  if (!root.querySelector('#rvList')) {
+    clear(root);
+    root.append(h('h3', null, 'รอตรวจ'));
+    const side = h('div', { id: 'rvSide' }, h('div', { id: 'rvCap', class: 'muted', style: 'margin-top:6px' }, 'คลิกการ์ดเพื่อดูตำแหน่งบนแผนที่'));
+    root.append(h('div', { class: 'rvwrap' }, h('div', { id: 'rvList' }), side));
+    ensureReviewMap(side);
+    setTimeout(() => reviewMap && reviewMap.invalidateSize(), 50);
+  }
+  const list = $('#rvList');
+  clear(list);
+  const items = reviewItems();
+  const corrs = Object.entries(D.corrPending || {}).filter(([, c]) => c && typeof c === 'object').sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
   const reqs = Object.entries(D.requests).filter(([, r]) => r && typeof r === 'object').sort((a, b) => (a[1].requestedAt || 0) - (b[1].requestedAt || 0));
-  if (!reqs.length) root.append(h('div', { class: 'card muted' }, 'ไม่มีคำขอที่รออยู่'));
+
+  // ----- 1. รายการที่ต้องตรวจ -----
+  list.append(h('h4', { id: 'secItems' }, `รายการที่ต้องตรวจ (${items.length})`));
+  if (!items.length) list.append(h('div', { class: 'card muted' }, 'ไม่มีรายการที่ต้องตรวจ'));
+  for (const it of items) list.append(reviewCard(it));
+
+  // ----- 2. คำขอแก้เวลา -----
+  list.append(h('h4', { id: 'secCorr' }, `คำขอแก้เวลา (${corrs.length})`));
+  if (!corrs.length) list.append(h('div', { class: 'card muted' }, 'ไม่มีคำขอแก้เวลา'));
+  for (const [cid, c] of corrs) list.append(corrCard(cid, c, corrs));
+
+  // ----- 3. คำขอผูกเครื่อง -----
+  list.append(h('h4', { id: 'secDev' }, `คำขอผูกเครื่อง (${reqs.filter(([, r]) => r.status === 'pending').length})`));
+  if (!reqs.length) list.append(h('div', { class: 'card muted' }, 'ไม่มีคำขอที่รออยู่'));
   for (const [uid, r] of reqs) {
     const s = (D.staff || {})[r.staffId];
     const secret = (D.secret || {})[r.staffId];
@@ -420,7 +1286,7 @@ function renderPending() {
     const other = Object.entries(D.staff).find(([sid, x]) => sid !== r.staffId && x && x.uid === uid);
     const rejected = r.status === 'rejected';
     const dup = !rejected && reqs.filter(([, x]) => x.staffId === r.staffId && x.status !== 'rejected').length > 1;
-    root.append(h('div', { class: 'card req' },
+    list.append(h('div', { class: 'card req' },
       h('div', null,
         h('div', null, h('b', null, s ? s.nickname : '(ไม่พบพนักงาน)'), ' ขอผูกเครื่อง'),
         dup && h('div', { class: 'notice' }, 'มีคำขอหลายรายการสำหรับชื่อนี้ — ตรวจให้ดีก่อนอนุมัติ'),
@@ -430,15 +1296,299 @@ function renderPending() {
           h('span', { class: 'tag ' + (pinOk ? 'ok' : 'bad') }, pinOk ? 'PIN ถูกต้อง ✔' : 'PIN ไม่ตรง ✘'),
           replaces && h('span', { class: 'tag late' }, 'จะแทนเครื่องเดิม'),
           other && h('span', { class: 'tag late' }, 'เครื่องนี้ผูกกับ ' + other[1].nickname + ' อยู่ จะย้ายให้'),
-          rejected && h('span', { class: 'tag' }, 'ไม่อนุมัติแล้ว')),
-        ),
+          rejected && h('span', { class: 'tag' }, 'ไม่อนุมัติแล้ว'))),
       h('div', { class: 'row' },
         s && !rejected && h('button', { class: 'btn' + (pinOk ? '' : ' gray'), onclick: () => approve(uid, r, s, pinOk, other) }, pinOk ? '✔ อนุมัติ' : 'อนุมัติทั้งที่ PIN ไม่ตรง'),
         !rejected && h('button', { class: 'btn orange', onclick: () => rejectReq(uid) }, '✘ ไม่อนุมัติ'),
         h('button', { class: 'btn gray', onclick: () => removeReq(uid) }, 'ลบ'))));
   }
-  root.append(h('p', { class: 'muted' }, 'หมายเหตุ: log ที่ติดธง ใกล้ขอบเขต/น่าสงสัย ถูกบันทึกไว้แล้วและเห็นป้ายในแท็บสถานะวันนี้ หน้าตรวจละเอียดจะมาในเฟสถัดไป'));
+  if (selectedKey) { const it = items.find((x) => x.key === selectedKey); if (it) document.querySelectorAll('#rvList .rvcard').forEach((el) => el.classList.toggle('sel', el.dataset.key === selectedKey)); }
 }
+
+function reviewCard(it) {
+  const k = it.kinds, l = it.log;
+  const title = it.kinds.has('anomaly') ? 'สถานะผิดปกติ'
+    : `${TYPE_TH[l.type] || l.type} ${fmtT(l.ts, it.d)}`;
+  const clockDiff = l && typeof l.clientTs === 'number' && Math.abs(l.clientTs - l.ts) > 5 * 60000
+    ? `นาฬิกาเครื่องต่าง ${Math.round(Math.abs(l.clientTs - l.ts) / 60000)} นาที / ส่งช้า (ออฟไลน์)` : '';
+  const branchName = l && l.branchId ? ((D.branches || {})[l.branchId] || {}).name || l.branchId : '';
+  const info = l && l.source === 'app' ? `${branchName} · ระยะตอนกด ${l.distance} ม. · ±${l.accuracy} ม.` : l ? branchName + ' · แอดมินบันทึก' : '';
+  const btns = [];
+  if (k.has('anomaly')) {
+    btns.push(h('button', { class: 'btn small orange', onclick: () => rebuildStateLatest(it.sid) }, 'ซ่อมสถานะ'));
+  } else {
+    if (!k.has('forgot') || k.size > 1) btns.push(h('button', { class: 'btn small b-ok', onclick: (e) => { e.stopPropagation(); approveItem(it); } }, '✔ ยืนยัน'));
+    btns.push(h('button', { class: 'btn small red b-no', onclick: (e) => { e.stopPropagation(); rejectItem(it); } }, k.has('forgot') && k.size === 1 ? '✘ ไม่ยืนยันทั้งกะ' : '✘ ไม่ยืนยัน'));
+    if (k.has('forgot')) btns.push(h('button', { class: 'btn small blue b-addout', onclick: (e) => { e.stopPropagation(); addOutFor(it); } }, 'เพิ่มเวลาออก'));
+    if (k.has('mismatch')) btns.push(h('button', { class: 'btn small orange b-move', onclick: (e) => { e.stopPropagation(); moveShift(it); } }, 'ย้ายไปวันที่ถูกต้อง'));
+    btns.push(h('button', { class: 'btn small gray b-edit', onclick: (e) => { e.stopPropagation(); gotoTimes(it.sid, it.d, true, it.id); } }, '✎ แก้'));
+  }
+  return h('div', { class: 'card rvcard' + (it.key === selectedKey ? ' sel' : ''), 'data-key': it.key, onclick: () => showOnMap(it) },
+    h('div', null, h('b', null, staffName(it.sid)), ' · ', dayLabel(it.d), ' · ', title),
+    h('div', { class: 'muted' }, info),
+    h('div', null, it.reasons.map((r) => h('span', { class: 'tag ' + r.c }, r.t)), clockDiff && h('span', { class: 'tag' }, clockDiff)),
+    h('div', { class: 'row', style: 'margin:6px 0 0' }, btns));
+}
+
+async function approveItem(it) {
+  await commitDayChange({ sid: it.sid, d: it.d, edits: [{ id: it.id, set: { review: 'approved' }, op: 'review_log' }], preview: 'never', title: 'ยืนยันรายการ' });
+}
+async function rejectItem(it) {
+  const forgotOnly = it.kinds.has('forgot') && it.kinds.size === 1;
+  if (!(await confirmBox('ไม่ยืนยัน', forgotOnly ? 'ไม่ยืนยันทั้งกะ — ทุกรายการของกะนี้จะไม่ถูกนับเป็นเวลาทำงาน' : 'รายการนี้จะไม่ถูกนับเป็นเวลาทำงาน (เปลี่ยนชั่วโมงทำงาน) ยืนยันหรือไม่', 'ไม่ยืนยัน'))) return;
+  let fresh;
+  try { fresh = await fetchDay(it.sid, it.d); } catch (e) { toast('อ่านข้อมูลไม่สำเร็จ: ' + (e.code || e.message)); return; }
+  const segIds = segmentIds(fresh.logs, it.id);
+  const one = [{ id: it.id, set: { review: 'rejected' }, op: 'review_log' }];
+  const whole = segIds.map((id) => ({ id, set: { review: 'rejected' }, op: 'review_log' }));
+  let edits = forgotOnly ? whole : one;
+  if (!forgotOnly) {
+    const sim = planChange({ sid: it.sid, d: it.d, fresh, edits: one, now: serverNow() });
+    if (!sim.error && sim.v.errors.length && whole.length > 1) {
+      const all = await confirmBox('ลำดับเหตุการณ์เสียหายถ้าไม่ยืนยันเฉพาะรายการนี้', `ถ้าไม่ยืนยันเฉพาะรายการนี้ รายการอื่นของกะจะกำพร้า (${sim.v.errors[0]}) — ไม่ยืนยันทั้งกะ (${whole.length} รายการ) แทนหรือไม่`, 'ไม่ยืนยันทั้งกะ');
+      if (!all) return;
+      edits = whole;
+    }
+  }
+  await commitDayChange({ sid: it.sid, d: it.d, edits, preview: 'warn', title: 'ไม่ยืนยัน' });
+}
+/** id ของทุกรายการ (ที่นับอยู่) ในกะเดียวกับ log id */
+function segmentIds(logsObj, id) {
+  const ev = logsToList(logsObj).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+  const i = ev.findIndex((e) => e.id === id);
+  if (i < 0) return [id];
+  let a = i; while (a > 0 && ev[a].type !== 'in') a--;
+  let b = i + 1; while (b < ev.length && ev[b].type !== 'in') b++;
+  return ev.slice(a, b).map((e) => e.id);
+}
+function addOutFor(it) {
+  const t = h('input', { type: 'time', id: 'aoTime' });
+  const plus = h('input', { type: 'checkbox', id: 'aoPlus' });
+  const err = h('div', { class: 'err' });
+  const inHH = it.log ? fmtTime(it.log.ts) : '';
+  t.addEventListener('input', () => { plus.checked = !!(t.value && inHH && t.value < inHH); });
+  openModal(`เพิ่มเวลาออก · ${staffName(it.sid)} · ${dayLabel(it.d)}`, [h('div', { class: 'muted' }, `เข้า ${fmtT(it.log.ts, it.d)}`), h('div', { class: 'row' }, h('label', null, 'เวลาออก', t), h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, plus, '+1 วัน (หลังเที่ยงคืน)')), err], [
+    { label: 'ยกเลิก' },
+    { label: 'ต่อไป', cls: 'blue', onClick: async () => {
+      if (!/^\d\d:\d\d$/.test(t.value)) { err.textContent = 'ใส่เวลาออก'; return false; }
+      closeModal();
+      let fresh; try { fresh = await fetchDay(it.sid, it.d); } catch (e) { toast('อ่านข้อมูลไม่สำเร็จ'); return false; }
+      await commitDayChange({ sid: it.sid, d: it.d, edits: [{ create: { type: 'out', ts: tsOf(it.d, t.value, plus.checked), branchId: defaultBranch(it.sid, fresh.logs) } }], preview: 'always', title: 'เพิ่มเวลาออก' });
+      return false;
+    } }
+  ]);
+}
+async function rebuildStateLatest(sid) {
+  const now = serverNow(), maxD = bangkokDate(now + 86400000);
+  let d = null;
+  for (const dd of Object.keys(D.logsWin).sort().reverse()) {
+    if (dd > maxD) continue;
+    if (summarize((D.logsWin[dd] || {})[sid]).ev.length) { d = dd; break; }
+  }
+  if (!d) d = bangkokDate(now);
+  await commitDayChange({ sid, d, edits: [], preview: 'always', title: 'ซ่อมสถานะ', stateOp: 'rebuild_state', forceState: true });
+}
+
+/* ย้ายกะไปวันที่ถูกต้อง (8.1.4): คัดลอก log ของกะไป logs/{d2} แล้ว void ของเดิม ใน update เดียว */
+async function moveShift(it) {
+  let fresh1;
+  try { fresh1 = await fetchDay(it.sid, it.d); } catch (e) { toast('อ่านข้อมูลไม่สำเร็จ: ' + (e.code || e.message)); return; }
+  const ev1 = logsToList(fresh1.logs).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+  const ids = segmentIds(fresh1.logs, it.id);
+  const seg = ev1.filter((e) => ids.includes(e.id));
+  const inLog = seg.find((e) => e.type === 'in');
+  if (!inLog) { toast('ไม่พบเวลาเข้างานของกะ'); return; }
+  const d2 = bangkokDate(inLog.ts);
+  if (d2 === it.d) { toast('วันที่ตรงกันแล้ว'); return; }
+  let fresh2;
+  try { fresh2 = await fetchDay(it.sid, d2); } catch (e) { toast('อ่านข้อมูลไม่สำเร็จ: ' + (e.code || e.message)); return; }
+  if ((fresh1.day && fresh1.day.confirmed === true) || (fresh2.day && fresh2.day.confirmed === true)) { toast('วันที่เกี่ยวข้องถูกยืนยันแล้ว ต้องปลดล็อกก่อน'); return; }
+  const now = serverNow();
+  const copies = seg.map((e) => { const { id, auditId, editedBy, editedAt, ...rest } = e; return { oldId: id, newId: push(A(`logs/${d2}/${it.sid}`)).key, node: { ...rest, movedFrom: `logs/${it.d}/${it.sid}/${id}` } }; });
+  const ev2 = logsToList(fresh2.logs).filter((l) => typeof l.ts === 'number' && !isExcluded(l)).concat(copies.map((c) => ({ ...c.node, id: c.newId }))).sort((a, b) => a.ts - b.ts || (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9));
+  const v = validateSeq(d2, ev2, now);
+  if (v.errors.length || ev2.length > copies.length) {
+    toast(`วันที่ ${d2} มีกะอยู่แล้ว หรือลำดับไม่ถูกต้อง (${v.errors[0] || 'มีรายการอยู่ก่อน'}) ใช้ ✘ หรือแก้ในบันทึกเวลา`); return;
+  }
+  // state: ถ้ากะที่ย้ายคือ workDate ของ state ให้ย้ายตามไป d2
+  let stItem = null;
+  const old = fresh1.state;
+  const ds = deriveState(it.sid, d2, ev2, old, now, !!(old && old.workDate === it.d));
+  if (ds.error) { toast(ds.error); return; }
+  if (ds.state) stItem = { path: `state/${it.sid}`, before: old, after: ds.state, op: 'move_log' };
+  const ok = await confirmBox('ย้ายกะไปวันที่ถูกต้อง', `ย้าย ${seg.length} รายการของ ${staffName(it.sid)} จากวันที่ ${it.d} ไปวันที่ ${d2}` + (stItem ? ` · สถานะจะเป็น: ${stateText(ds.state)}` : ''), 'ย้าย', 'blue');
+  if (!ok) return;
+  const group = push(A('audit')).key;
+  const items = [];
+  for (const c of copies) {
+    const old1 = fresh1.logs[c.oldId];
+    items.push({ path: `logs/${it.d}/${it.sid}/${c.oldId}`, before: old1, after: { ...old1, voided: true, note: ((old1.note ? old1.note + ' · ' : '') + `ย้ายไป ${d2}`).slice(0, 200) }, op: 'move_log' });
+    items.push({ path: `logs/${d2}/${it.sid}/${c.newId}`, after: c.node, op: 'move_log' });
+  }
+  if (stItem) items.push(stItem);
+  const upd = withAudit({}, items, { group, reason: 'ย้ายวันทำงานให้ตรงเวลาจริง' });
+  try { await update(A(''), upd); }
+  catch (e) { toast(e && e.code === 'PERMISSION_DENIED' ? 'ข้อมูลเปลี่ยนระหว่างย้าย หรือวันถูกยืนยันแล้ว — ตรวจแล้วลองอีกครั้ง' : 'ย้ายไม่สำเร็จ: ' + (e.code || e.message)); return; }
+  T.cache = { logs: {}, days: {} };
+  refresh();
+}
+
+/* ----- คำขอแก้เวลา ----- */
+const CORR_TH = { in: 'ลืมกดเข้างาน', out: 'ลืมกดออกงาน', break: 'ลืมกดพัก', break_end: 'ลืมกดกลับจากพัก', break_start: 'ลืมกดเริ่มพัก' };
+function corrTimes(c) {
+  const t1 = tsOf(c.workDate, c.time, !!c.nextDay);
+  return { t1, t2: c.type === 'break' && c.endTime ? tsOf(c.workDate, c.endTime, !!c.endNextDay) : null };
+}
+function corrCard(cid, c, all) {
+  const sid = c.staffId;
+  const locked = !!(((D.days || {})[c.workDate] || {})[sid] || {}).confirmed;
+  const dup = all.filter(([k, x]) => k !== cid && x.staffId === sid && x.workDate === c.workDate && x.type === c.type).length > 0;
+  const sum = summarize(((D.logsWin || {})[c.workDate] || {})[sid]);
+  const tl = c.workDate < winKey ? '(วันนี้อยู่นอกช่วงที่แสดง)' : timelineText(c.workDate, sum.ev);
+  const when = `${c.time}${c.nextDay ? ' (เช้าวันถัดไป)' : ''}${c.type === 'break' ? ` – ${c.endTime}${c.endNextDay ? ' (เช้าวันถัดไป)' : ''}` : ''}`;
+  const btns = locked
+    ? [h('button', { class: 'btn small orange c-unlock', onclick: async () => { if (await unlockDay(sid, c.workDate)) openApplyCorrection(cid, c, false); } }, 'ปลดล็อกแล้วตรวจ')]
+    : [h('button', { class: 'btn small c-ok', onclick: () => openApplyCorrection(cid, c, false) }, '✔ ยืนยัน'),
+       h('button', { class: 'btn small blue c-edit', onclick: () => openApplyCorrection(cid, c, true) }, '✎ แก้')];
+  btns.push(h('button', { class: 'btn small red c-no', onclick: () => rejectCorrection(cid, c) }, '✘ ไม่ยืนยัน'));
+  return h('div', { class: 'card corrcard', 'data-cid': cid },
+    h('div', null, h('b', null, staffName(sid)), ' · ', h('b', null, CORR_TH[c.type] || c.type), ' · ', dayLabel(c.workDate), ' · ', when),
+    h('div', null, 'เหตุผล: ', c.reason || ''),
+    h('div', { class: 'muted' }, 'ส่งเมื่อ ', c.createdAt ? `${bangkokDate(c.createdAt)} ${fmtTime(c.createdAt)}` : '-'),
+    h('div', { class: 'muted' }, 'ไทม์ไลน์ปัจจุบัน: ', tl),
+    h('div', null, locked && h('span', { class: 'tag bad' }, 'วันนี้ยืนยันแล้ว'), dup && h('span', { class: 'tag late' }, 'มีคำขอซ้ำ')),
+    h('div', { class: 'row', style: 'margin:6px 0 0' }, btns));
+}
+const QUICK_REJECT = ['เวลาไม่ตรงกับที่เห็น', 'ไม่มีเหตุผลพอ', 'แก้ให้แล้วด้วยวิธีอื่น'];
+function rejectCorrection(cid, c) {
+  const note = h('input', { type: 'text', id: 'rjNote', maxlength: 200, size: 40, placeholder: 'ข้อความถึงพนักงาน (ไม่บังคับ)' });
+  openModal(`ไม่ยืนยันคำขอของ ${staffName(c.staffId)}`, [h('div', null, `${CORR_TH[c.type] || c.type} · ${dayLabel(c.workDate)} · ${c.time}`), h('div', { class: 'row' }, QUICK_REJECT.map((t) => h('button', { class: 'btn small gray', type: 'button', onclick: () => { note.value = t; } }, t))), h('div', { class: 'row' }, h('label', null, 'ข้อความ', note))], [
+    { label: 'ยกเลิก' },
+    { label: 'ไม่ยืนยันคำขอ', cls: 'red', onClick: async () => {
+      const after = { ...c, status: 'rejected', decidedBy: uidNow, decidedAt: serverTimestamp() };
+      if (note.value.trim()) after.resultNote = note.value.trim();
+      const group = push(A('audit')).key;
+      try { await update(A(''), withAudit({}, [{ path: `corrections/${cid}`, before: c, after, op: 'decide_correction' }], { group, refId: cid })); }
+      catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); return false; }
+    } }
+  ]);
+}
+/** สร้าง edits ของคำขอแก้เวลา (ข้อ 6) -> { edits, applied: { ts, logId, endTs?, endLogId? } } */
+function buildCorrEdits(cid, c, f, fresh) {
+  const d = c.workDate, sid = c.staffId;
+  const t1 = tsOf(d, f.time, f.nextDay), t2 = c.type === 'break' ? tsOf(d, f.endTime, f.endNextDay) : null;
+  const sum = summarize(fresh.logs);
+  const br = defaultBranch(sid, fresh.logs);
+  const mkId = () => push(A(`logs/${d}/${sid}`)).key;
+  const note = 'จากคำขอแก้เวลา';
+  const edits = [], applied = {};
+  const create = (type, ts) => { const id = mkId(); edits.push({ id, create: { type, ts, branchId: br, note, correctionId: cid } }); return id; };
+  const editLog = (id, ts) => { edits.push({ id, set: { ts, correctionId: cid } }); return id; };
+  if (c.type === 'break') {
+    applied.logId = create('break_start', t1); applied.ts = t1;
+    applied.endLogId = create('break_end', t2); applied.endTs = t2;
+  } else {
+    const id = f.target && f.target !== 'new' ? f.target : null;
+    applied.ts = t1;
+    applied.logId = id ? editLog(id, t1) : create(c.type, t1);
+  }
+  return { edits, applied };
+}
+/** ตัวเลือกเริ่มต้นของ "แก้รายการเดิม" ตามประเภท (ข้อ 6 ข้อ 3) -> { options:[{id,label}], def } */
+function corrTargets(c, fresh) {
+  const sum = summarize(fresh.logs);
+  const d = c.workDate;
+  const opts = [];
+  let def = 'new';
+  if (c.type === 'in') {
+    sum.ev.filter((e) => e.type === 'in').forEach((e) => opts.push({ id: e.id, label: `แก้รายการเดิม: เข้า ${fmtT(e.ts, d)}` }));
+    if (opts.length) def = opts[0].id;
+  } else if (c.type === 'out') {
+    const last = sum.segments[sum.segments.length - 1];
+    sum.ev.filter((e) => e.type === 'out').forEach((e) => opts.push({ id: e.id, label: `แก้รายการเดิม: ออก ${fmtT(e.ts, d)}` }));
+    if (last && last.outLog) def = last.outLog.id;
+  } else if (c.type === 'break_end') {
+    const t1 = tsOf(d, c.time, !!c.nextDay);
+    const last = sum.segments[sum.segments.length - 1];
+    const ends = sum.ev.filter((e) => e.type === 'break_end');
+    ends.forEach((e) => opts.push({ id: e.id, label: `แก้รายการเดิม: กลับจากพัก ${fmtT(e.ts, d)}` }));
+    if (!(last && last.openBreak != null) && ends.length) {
+      const starts = sum.ev.filter((e) => e.type === 'break_start').sort((a, b) => Math.abs(a.ts - t1) - Math.abs(b.ts - t1));
+      const s0 = starts[0];
+      const after = s0 ? ends.find((e) => e.ts > s0.ts) : null;
+      if (after) def = after.id;
+    }
+  }
+  return { opts, def };
+}
+async function openApplyCorrection(cid, c, editable) {
+  let fresh;
+  try { fresh = await fetchDay(c.staffId, c.workDate); } catch (e) { toast('อ่านข้อมูลไม่สำเร็จ: ' + (e.code || e.message)); return; }
+  if (fresh.day && fresh.day.confirmed === true) { lockedPrompt(c.staffId, c.workDate); return; }
+  const tg = corrTargets(c, fresh);
+  const f = { time: c.time, endTime: c.endTime || '', nextDay: !!c.nextDay, endNextDay: !!c.endNextDay, target: tg.def };
+  const dis = !editable;
+  const t1 = h('input', { type: 'time', id: 'apTime', disabled: dis, '.value': f.time });
+  const cb1 = h('input', { type: 'checkbox', id: 'apPlus', disabled: dis, '.checked': f.nextDay });
+  const t2 = c.type === 'break' ? h('input', { type: 'time', id: 'apEnd', disabled: dis, '.value': f.endTime }) : null;
+  const cb2 = c.type === 'break' ? h('input', { type: 'checkbox', id: 'apPlus2', disabled: dis, '.checked': f.endNextDay }) : null;
+  const sel = h('select', { id: 'apTarget', disabled: dis }, h('option', { value: 'new' }, 'สร้างรายการใหม่'), tg.opts.map((o) => h('option', { value: o.id }, o.label)));
+  sel.value = f.target;
+  const note = h('input', { type: 'text', id: 'apNote', maxlength: 200, size: 40, placeholder: 'ข้อความถึงพนักงาน (ไม่บังคับ)' });
+  const fb = h('div', { id: 'apFeedback' });
+  let current = null;
+  const recompute = () => {
+    f.time = t1.value; f.nextDay = cb1.checked; if (t2) { f.endTime = t2.value; f.endNextDay = cb2.checked; } f.target = sel.value;
+    clear(fb); current = null;
+    if (!/^\d\d:\d\d$/.test(f.time) || (t2 && !/^\d\d:\d\d$/.test(f.endTime))) { fb.append(h('div', { class: 'err' }, 'ใส่เวลาให้ครบ')); return; }
+    const built = buildCorrEdits(cid, c, f, fresh);
+    const plan = planChange({ sid: c.staffId, d: c.workDate, fresh, edits: built.edits, now: serverNow() });
+    if (plan.error) { fb.append(h('div', { class: 'err' }, plan.error)); return; }
+    const before = logsToList(fresh.logs).filter((l) => typeof l.ts === 'number' && !isExcluded(l));
+    fb.append(h('div', { class: 'muted' }, 'ก่อน: ' + timelineText(c.workDate, before)), h('div', { style: 'font-weight:700' }, 'หลัง: ' + timelineText(c.workDate, plan.evAfter)));
+    const errs = [...plan.v.errors]; if (plan.ds.error) errs.push(plan.ds.error);
+    errs.forEach((m) => fb.append(h('div', { class: 'apErr', style: 'color:#b91c1c;font-weight:600' }, '✘ ' + m)));
+    plan.v.warnings.forEach((m) => fb.append(h('div', { style: 'color:#c2410c' }, '⚠ ' + m)));
+    if (plan.ds.state) fb.append(h('div', { class: 'notice' }, `สถานะของ ${staffName(c.staffId)} จะเปลี่ยนเป็น: ${stateText(plan.ds.state)}`));
+    current = { built, plan, errs };
+    const okBtn = document.getElementById('apOk'); if (okBtn) okBtn.disabled = errs.length > 0;
+  };
+  for (const e of [t1, cb1, t2, cb2, sel]) if (e) e.addEventListener('change', recompute);
+  t1.addEventListener('input', () => { const f0 = summarize(fresh.logs).segments[0]; if (f0 && /^\d\d:\d\d$/.test(t1.value) && editable) cb1.checked = t1.value < fmtTime(f0.inTs) && c.type !== 'in'; recompute(); });
+  if (t2) t2.addEventListener('input', () => { const f0 = summarize(fresh.logs).segments[0]; if (f0 && /^\d\d:\d\d$/.test(t2.value) && editable) cb2.checked = t2.value < fmtTime(f0.inTs); recompute(); });
+  const rows = [h('div', null, h('b', null, staffName(c.staffId)), ' · ', CORR_TH[c.type] || c.type, ' · ', dayLabel(c.workDate)), h('div', { class: 'muted' }, 'เหตุผล: ' + (c.reason || ''))];
+  rows.push(h('div', { class: 'row' }, h('label', null, c.type === 'break' ? 'เริ่มพัก' : 'เวลา', t1), h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, cb1, '+1 วัน')));
+  if (t2) rows.push(h('div', { class: 'row' }, h('label', null, 'กลับจากพัก', t2), h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, cb2, '+1 วัน')));
+  if (c.type !== 'break') rows.push(h('div', { class: 'row' }, h('label', null, 'การบันทึก', sel)));
+  rows.push(fb, h('div', { class: 'row' }, h('label', null, 'ข้อความถึงพนักงาน', note)));
+  const buttons = [{ label: 'ยกเลิก' }];
+  if (editable) buttons.push({ label: 'อนุมัติโดยไม่แก้บันทึก', cls: 'gray', onClick: async () => {
+    const after = { ...c, status: 'approved', decidedBy: uidNow, decidedAt: serverTimestamp() };
+    if (note.value.trim()) after.resultNote = note.value.trim();
+    const group = push(A('audit')).key;
+    try { await update(A(''), withAudit({}, [{ path: `corrections/${cid}`, before: c, after, op: 'decide_correction' }], { group, refId: cid })); }
+    catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); return false; }
+  } });
+  buttons.push({ label: 'อนุมัติตามนี้', cls: 'blue', keepOpen: true, onClick: async () => {
+    if (!current || current.errs.length) return;
+    const { built } = current;
+    const after = { ...c, status: 'approved', decidedBy: uidNow, decidedAt: serverTimestamp(), appliedTs: built.applied.ts, appliedLogId: built.applied.logId };
+    if (built.applied.endLogId) { after.appliedEndTs = built.applied.endTs; after.appliedEndLogId = built.applied.endLogId; }
+    if (note.value.trim()) after.resultNote = note.value.trim();
+    closeModal();
+    const ok = await commitDayChange({
+      sid: c.staffId, d: c.workDate, edits: built.edits, refId: cid, preview: 'never', title: 'อนุมัติคำขอแก้เวลา',
+      extraItems: [{ path: `corrections/${cid}`, before: c, after, op: 'decide_correction' }]
+    });
+    return ok;
+  } });
+  openModal(editable ? 'แก้แล้วอนุมัติคำขอ' : 'ยืนยันคำขอแก้เวลา', rows, buttons);
+  const okb = [...document.querySelectorAll('#modal .acts button')].find((b) => b.textContent === 'อนุมัติตามนี้'); if (okb) okb.id = 'apOk';
+  const nob = [...document.querySelectorAll('#modal .acts button')].find((b) => b.textContent === 'อนุมัติโดยไม่แก้บันทึก'); if (nob) nob.id = 'apNoApply';
+  recompute();
+}
+
+/* ====== 3.1 คำขอผูกเครื่อง (ของเดิม) ====== */
 async function approve(uid, r, s, pinOk, other) {
   if (!pinOk && !(await confirmBox('PIN ไม่ตรง', `PIN ที่ ${s.nickname} ใส่ไม่ตรงกับที่ตั้งไว้ ยืนยันอนุมัติหรือไม่`, 'อนุมัติ', 'orange'))) return;
   const sid = r.staffId;
@@ -451,6 +1601,40 @@ async function approve(uid, r, s, pinOk, other) {
 }
 async function rejectReq(uid) { try { await update(A('deviceRequests/' + uid), { status: 'rejected' }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
 async function removeReq(uid) { try { await remove(A('deviceRequests/' + uid)); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
+
+/* ====== ปฏิทินวันทำงาน (ข้อ 8.4) ====== */
+function updateCalendarCard() {
+  const info = $('#calInfo'), chk = $('#calEnforce'); if (!info) return;
+  info.textContent = D.calLast ? `ปฏิทินมีถึงวันที่ ${D.calLast}` : (D.calLast === '' ? 'ยังไม่มีปฏิทิน' : 'กำลังโหลด...');
+  if (chk) chk.checked = !!(D.settings && D.settings.calendarEnforced === true);
+  const cw = $('#calCovWarn');
+  if (cw) {
+    const left = D.calLast ? Math.floor((Date.parse(D.calLast + 'T00:00:00+07:00') - serverNow()) / 86400000) : -1;
+    const low = D.calLast !== null && left < 60;
+    cw.textContent = low ? (D.settings && D.settings.calendarEnforced === true ? 'ปฏิทินใกล้หมด (เหลือน้อยกว่า 60 วัน) — พนักงานจะกดเข้างานไม่ได้เมื่อหมด กดสร้าง/ต่ออายุเดี๋ยวนี้' : 'ปฏิทินเหลือน้อยกว่า 60 วัน — ต่ออายุก่อนเปิดบังคับใช้') : '';
+    cw.classList.toggle('hidden', !low);
+  }
+}
+async function genCalendar() {
+  const today = bangkokDate(serverNow());
+  const endDate = `${Number(today.slice(0, 4)) + 5}-12-31`;
+  const up = {}; let ms = Date.parse(addDays(today, -70) + 'T00:00:00+07:00'), n = 0;
+  up['settings/calendarLast'] = endDate;
+  for (;;) { const d = bangkokDate(ms); if (d > endDate) break; up['calendar/' + d] = ms; ms += 86400000; n++; }
+  if (!(await confirmBox('สร้าง/ต่ออายุปฏิทิน', `จะเขียนปฏิทิน ${n} วัน (${addDays(today, -70)} ถึง ${endDate})`, 'สร้าง', 'blue'))) return;
+  try { await update(A(''), up); toast(`สร้างปฏิทินถึง ${endDate} แล้ว`); }
+  catch (e) { toast('สร้างปฏิทินไม่สำเร็จ: ' + (e.code || e.message)); }
+}
+async function toggleCalEnforce(chk) {
+  const want = chk.checked;
+  if (want) {
+    const need = addDays(bangkokDate(serverNow()), 365);
+    if (!D.calLast || D.calLast < need) { chk.checked = false; toast('ปฏิทินยังไม่ครอบคลุมอย่างน้อยวันนี้ + 365 วัน กดสร้าง/ต่ออายุก่อน'); return; }
+    if (!(await confirmBox('เปิดบังคับใช้ปฏิทิน', 'พนักงานจะกดเข้างานได้เฉพาะวันที่ตรงกับเวลาจริง ถ้าปฏิทินหมดอายุ พนักงานทุกคนจะกดเข้างานไม่ได้ ยืนยันเปิดหรือไม่', 'เปิดบังคับ', 'orange'))) { chk.checked = false; return; }
+  }
+  try { await set(A('settings/calendarEnforced'), want); }
+  catch (e) { chk.checked = !want; toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
+}
 
 /* ====== 3. พนักงาน ====== */
 const PIN_RE = /^[0-9]{4}$/, SHIFT_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
@@ -529,7 +1713,10 @@ function editStaff(sid, s) {
       const nick = n.value.trim();
       if (!nick || nick.length > 20) { err.textContent = 'ชื่อเล่นไม่ถูกต้อง'; return false; }
       if (!SHIFT_RE.test(sh.value)) { err.textContent = 'เวลาเข้ากะต้องเป็น HH:MM'; return false; }
-      try { await update(A('staff/' + sid), { nickname: nick, branchId: b.value, shiftStart: sh.value }); } catch (e) { err.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); return false; }
+      const chg = { nickname: nick, branchId: b.value, shiftStart: sh.value };
+      const up = {}; for (const [k, v] of Object.entries(chg)) up[`staff/${sid}/${k}`] = v;
+      bestEffortAudit(up, 'staff/' + sid, { nickname: s.nickname, branchId: s.branchId, shiftStart: s.shiftStart }, chg, 'edit_staff');
+      try { await update(A(''), up); } catch (e) { err.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); return false; }
     } }
   ]);
 }
@@ -553,12 +1740,14 @@ async function unbind(sid, s) {
 async function toggleActive(sid, s) {
   const to = s.active === false;
   if (!to && !(await confirmBox('ปิดบัญชี', `ปิดบัญชีของ ${s.nickname} หรือไม่ (ข้อมูลเดิมไม่หาย)`, 'ปิดบัญชี'))) return;
-  try { await update(A('staff/' + sid), { active: to }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
+  const up = { [`staff/${sid}/active`]: to };
+  bestEffortAudit(up, 'staff/' + sid, { active: s.active !== false }, { active: to }, 'edit_staff');
+  try { await update(A(''), up); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
 }
 
 /* ====== 4. ตั้งค่าสาขา ====== */
 const mapCards = new Map();   // bid -> {map, update(b), el}
-function destroyMaps() { mapCards.forEach((c) => c.map.remove()); mapCards.clear(); }
+function destroyMaps() { mapCards.forEach((c) => c.map.remove()); mapCards.clear(); if (reviewMap) { reviewMap.remove(); reviewMap = null; reviewLayer = null; } }
 const THAI_CENTER = [13.0, 101.0];
 
 function parseLatLng(text) {
@@ -666,7 +1855,10 @@ function buildBranchCard(bid, b) {
       if (!(isFinite(la) && isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180)) return (err.textContent = 'พิกัดไม่ถูกต้อง');
       v.lat = la; v.lng = ln;
     }
-    try { await update(A('branches/' + bid), v); setDirty(false); } catch (e) { err.textContent = 'บันทึกไม่สำเร็จ: ' + (e.code || e.message); }
+    const up = {}; for (const [k, val] of Object.entries(v)) up[`branches/${bid}/${k}`] = val;
+    const { updatedAt, ...afterV } = v;
+    bestEffortAudit(up, 'branches/' + bid, D.branches && D.branches[bid] ? (({ updatedAt: _u, ...r }) => r)(D.branches[bid]) : null, afterV, 'edit_branch');
+    try { await update(A(''), up); setDirty(false); } catch (e) { err.textContent = 'บันทึกไม่สำเร็จ: ' + (e.code || e.message); }
   });
   return { map, el, update: (bb) => { if (!dirty) fill(bb); } };
 }
@@ -687,19 +1879,38 @@ function renderBranches() {
     const holder = h('div'); root.append(holder);
     for (const bid of ids) { const c = buildBranchCard(bid, D.branches[bid]); mapCards.set(bid, c); holder.append(c.el); }
     const lg = h('input', { type: 'number', min: 0, max: 120, id: 'lateGrace', style: 'width:80px' });
-    const lgMsg = h('span', { class: 'err' });
+    const rdI = h('input', { type: 'number', min: 7, max: 92, id: 'reviewDays', style: 'width:80px' });
+    const cdI = h('input', { type: 'number', min: 1, max: 62, id: 'correctionDays', style: 'width:80px' });
+    const lgMsg = h('span', { class: 'err', id: 'generalMsg' });
     root.append(h('div', { class: 'card', id: 'general' }, h('h3', null, 'ค่าทั่วไป'),
-      h('div', { class: 'row' }, h('label', null, 'นับว่ามาสายเมื่อเกินเวลากะ (นาที)', lg),
-        h('button', { class: 'btn', onclick: async () => {
-          const v = Number(lg.value);
-          if (!(v >= 0 && v <= 120)) { lgMsg.textContent = 'ต้องอยู่ระหว่าง 0-120'; return; }
-          try { await set(A('settings/lateGraceMin'), v); lgMsg.textContent = ''; toast('บันทึกแล้ว'); } catch (e) { lgMsg.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); }
+      h('div', { class: 'row' },
+        h('label', null, 'นับว่ามาสายเมื่อเกินเวลากะ (นาที)', lg),
+        h('label', null, 'คิวรอตรวจดูย้อนหลัง (วัน) 7-92', rdI),
+        h('label', null, 'พนักงานขอแก้เวลาย้อนหลังได้ (วัน) 1-62', cdI),
+        h('button', { class: 'btn', id: 'generalSave', onclick: async () => {
+          const v1 = Number(lg.value), v2 = Number(rdI.value), v3 = Number(cdI.value);
+          if (!(v1 >= 0 && v1 <= 120)) { lgMsg.textContent = 'เวลาสายต้องอยู่ระหว่าง 0-120'; return; }
+          if (!(Number.isInteger(v2) && v2 >= 7 && v2 <= 92)) { lgMsg.textContent = 'ย้อนหลังตรวจต้องอยู่ระหว่าง 7-92 วัน'; return; }
+          if (!(Number.isInteger(v3) && v3 >= 1 && v3 <= 62)) { lgMsg.textContent = 'ขอแก้ย้อนหลังต้องอยู่ระหว่าง 1-62 วัน'; return; }
+          try { await update(A(''), { 'settings/lateGraceMin': v1, 'settings/reviewDays': v2, 'settings/correctionDays': v3 }); lgMsg.textContent = ''; toast('บันทึกแล้ว'); } catch (e) { lgMsg.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); }
         } }, 'บันทึก')), lgMsg));
-    lg.value = D.settings.lateGraceMin ?? 5;
+    lg.value = D.settings.lateGraceMin ?? 5; rdI.value = D.settings.reviewDays ?? 31; cdI.value = D.settings.correctionDays ?? 7;
+    // ----- ปฏิทินวันทำงาน (กันพนักงานเลือกวันทำงานเอง) -----
+    const calChk = h('input', { type: 'checkbox', id: 'calEnforce' });
+    calChk.addEventListener('change', () => toggleCalEnforce(calChk));
+    root.append(h('div', { class: 'card', id: 'calcard' }, h('h3', null, 'ปฏิทินวันทำงาน (กันเลือกวันเอง)'),
+      h('div', { id: 'calInfo' }),
+      h('div', { id: 'calCovWarn', class: 'notice hidden' }),
+      h('div', { class: 'muted' }, 'ปฏิทินคือเวลาเที่ยงคืนของแต่ละวันที่ rules ใช้ตรวจว่าพนักงานกดเข้างานตรงวันจริง ปิดไว้เป็นค่าเริ่มต้น เปิดได้เมื่อปฏิทินครอบคลุมอย่างน้อยวันนี้ + 365 วัน'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn blue', id: 'calGen', onclick: genCalendar }, 'สร้าง/ต่ออายุ 5 ปี'),
+        h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, calChk, 'บังคับใช้ (พนักงานกดเข้างานได้เฉพาะวันที่ตรงกับเวลาจริง)'))));
+    updateCalendarCard();
     setTimeout(() => mapCards.forEach((c) => c.map.invalidateSize()), 50);
   } else {
     for (const bid of ids) mapCards.get(bid).update(D.branches[bid]);
-    const lg = $('#lateGrace'); if (lg && document.activeElement !== lg) lg.value = D.settings.lateGraceMin ?? 5;
+    for (const [id, val] of [['lateGrace', D.settings.lateGraceMin ?? 5], ['reviewDays', D.settings.reviewDays ?? 31], ['correctionDays', D.settings.correctionDays ?? 7]]) { const el = $('#' + id); if (el && document.activeElement !== el) el.value = val; }
+    updateCalendarCard();
   }
 }
 async function seedBranches() {

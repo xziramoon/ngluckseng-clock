@@ -18,6 +18,7 @@ html,body{margin:0;height:100%}
 body{font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;font-size:19px;color:#111827;background:#fff;
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   -webkit-user-select:none;user-select:none}
+input,textarea{-webkit-user-select:text;user-select:text}
 button{font:inherit;border:0;cursor:pointer;touch-action:manipulation}
 #root{min-height:100%;display:flex;flex-direction:column;padding:14px}
 .hdr{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:21px;font-weight:700;margin-bottom:6px}
@@ -57,6 +58,21 @@ button{font:inherit;border:0;cursor:pointer;touch-action:manipulation}
 #cf{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;display:flex;align-items:flex-end;justify-content:center}
 #cf .box{background:#fff;border-radius:22px 22px 0 0;padding:22px;width:100%;max-width:520px}
 .hidden{display:none!important}
+/* แจ้งแก้เวลา (หน้า D) */
+.back{background:#e5e7eb;color:#111827;border-radius:14px;padding:12px 18px;font-size:22px;font-weight:700;min-height:56px;margin-bottom:8px}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:#dc2626;margin-left:6px;vertical-align:middle}
+.dayb{background:#16a34a;color:#fff;border-radius:16px;font-size:24px;font-weight:700;min-height:76px;padding:10px 14px;width:100%;margin-top:10px;text-align:left}
+.dayb small{display:block;font-size:17px;font-weight:500;opacity:.92}
+.typeb{background:#2563eb;color:#fff;border-radius:16px;font-size:26px;font-weight:700;min-height:84px;padding:10px;width:100%;margin-top:10px}
+.timein{font:inherit;font-size:36px;font-weight:700;padding:10px 14px;border:3px solid #9ca3af;border-radius:14px;width:100%;margin:6px 0}
+.chk{display:flex;align-items:center;gap:12px;font-size:22px;margin:10px 0;min-height:48px}
+.chk input{width:30px;height:30px}
+.reasons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0}
+.reasons button{background:#e5e7eb;color:#111827;border-radius:14px;font-size:21px;font-weight:600;min-height:64px;padding:8px}
+.reasons button.on{background:#16a34a;color:#fff}
+textarea.rt{font:inherit;font-size:21px;width:100%;min-height:80px;padding:10px;border:3px solid #9ca3af;border-radius:14px}
+.stt{display:inline-block;font-size:17px;font-weight:700;padding:2px 12px;border-radius:999px;margin-bottom:4px}
+.stt.p{background:#fef08a;color:#713f12}.stt.a{background:#dcfce7;color:#166534}.stt.r{background:#fee2e2;color:#991b1b}
 </style>
 </head>
 <body>
@@ -67,7 +83,7 @@ button{font:inherit;border:0;cursor:pointer;touch-action:manipulation}
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
 import { getAuth, setPersistence, indexedDBLocalPersistence, signInAnonymously, onAuthStateChanged, connectAuthEmulator }
   from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
-import { getDatabase, ref, onValue, get, set, remove, update, push, serverTimestamp, connectDatabaseEmulator }
+import { getDatabase, ref, onValue, get, set, remove, update, push, serverTimestamp, connectDatabaseEmulator, query, orderByChild, equalTo }
   from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js';
 
 /* ====== ตั้งค่า Firebase (เจ้าของใส่เอง ดู README ข้อ 7) ====== */
@@ -124,7 +140,7 @@ if ('serviceWorker' in navigator && !EMU) navigator.serviceWorker.register('./sw
 /* ====== เวลา ====== */
 let serverOffset = 0;
 const serverNow = () => Date.now() + serverOffset;
-const timeF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
+const timeF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const dateF = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' });
 const fmtTime = (ms) => timeF.format(ms);
 const bangkokDate = (ms) => dateF.format(ms);
@@ -140,12 +156,12 @@ async function sha256Hex(text) {
 const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 /* ====== ข้อมูลสด ====== */
-const D = { staff: null, branches: null, settings: null, state: undefined, logs: null, req: undefined };
+const D = { staff: null, branches: null, settings: null, state: undefined, logs: null, req: undefined, corr: null };
 let user = null;
 let connected = true;
 let me = null;            // { sid, s }
 let unsubs = [];
-let stateUnsub = null, logsUnsub = null, logsKey = '';
+let stateUnsub = null, logsUnsub = null, logsKey = '', corrUnsub = null;
 const getLast = () => { try { return JSON.parse(localStorage.getItem('clock.last') || 'null'); } catch (_) { return null; } };
 
 let reg = { step: null, sid: null, pin: '', err: '' };   // ขั้นตอนลงทะเบียน
@@ -175,8 +191,11 @@ function onStaff() {
     reg = { step: null, sid: null, pin: '', err: '' };
     if (stateUnsub) stateUnsub();
     stateUnsub = onValue(A('state/' + me.sid), (s) => { D.state = s.val(); syncLogs(); render(); }, onListenErr);
+    if (corrUnsub) corrUnsub();
+    D.corr = null;
+    corrUnsub = onValue(query(A('corrections'), orderByChild('staffId'), equalTo(me.sid)), (s) => { D.corr = s.val() || {}; render(); }, onListenErr);
   }
-  if (!me && prev) { if (stateUnsub) stateUnsub(); stateUnsub = null; D.state = undefined; if (logsUnsub) logsUnsub(); logsUnsub = null; logsKey = ''; D.logs = null; }
+  if (!me && prev) { if (corrUnsub) corrUnsub(); corrUnsub = null; D.corr = null; corrView = null; if (stateUnsub) stateUnsub(); stateUnsub = null; D.state = undefined; if (logsUnsub) logsUnsub(); logsUnsub = null; logsKey = ''; D.logs = null; }
   if (me) { try { localStorage.setItem('clock.last', JSON.stringify({ sid: me.sid, nickname: me.s.nickname })); } catch (_) { } }
   render();
 }
@@ -207,17 +226,32 @@ function mainMode() {
   if (st.status === 'done') return st.workDate === today ? 'DONE' : 'OFF';
   return 'OFF';
 }
+/** รายการที่ไม่นับ: เจ้าของยกเลิก (voided) หรือกด ✘ ไม่ยืนยัน (rejected) */
+const isExcluded = (l) => !!l && (l.voided === true || l.review === 'rejected');
+const TYPE_ORDER = { in: 0, break_start: 1, break_end: 2, out: 3 };
+/** summarize v2: แบ่งเป็น segment ที่เริ่มด้วย in; ค่า inTs/outTs/breakMs/openBreak เท่าเดิมในกรณี 1 กะ/วัน */
 function summarize(logsObj) {
-  const ev = Object.values(logsObj || {}).filter((l) => l && typeof l.ts === 'number').sort((a, b) => a.ts - b.ts);
-  const r = { ev, inTs: null, outTs: null, breakMs: 0, openBreak: null };
+  const ev = Object.entries(logsObj || {}).filter(([, l]) => l && typeof l.ts === 'number' && !isExcluded(l)).map(([id, l]) => ({ ...l, id }))
+    .sort((a, b) => a.ts - b.ts || (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9));
+  const segments = []; const flags = new Set(); let cur = null;
   for (const e of ev) {
-    if (e.type === 'in') { r.inTs = e.ts; r.outTs = null; r.breakMs = 0; r.openBreak = null; }
-    else if (e.type === 'break_start') r.openBreak = e.ts;
-    else if (e.type === 'break_end' && r.openBreak != null) { r.breakMs += e.ts - r.openBreak; r.openBreak = null; }
-    else if (e.type === 'out') r.outTs = e.ts;
+    if (e.flag && !e.review) flags.add(e.flag);
+    if (e.type === 'in') { cur = { inTs: e.ts, outTs: null, breakMs: 0, openBreak: null }; segments.push(cur); continue; }
+    if (!cur) continue;
+    if (e.type === 'break_start') { if (cur.openBreak == null) cur.openBreak = e.ts; }
+    else if (e.type === 'break_end') { if (cur.openBreak != null) { cur.breakMs += e.ts - cur.openBreak; cur.openBreak = null; } }
+    else if (e.type === 'out') cur.outTs = e.ts;
   }
-  return r;
+  const last = segments[segments.length - 1] || null;
+  const netMs = segments.filter((g) => g.outTs != null).reduce((a, g) => a + (g.outTs - g.inTs - g.breakMs), 0);
+  return { ev, segments, flags, inTs: segments[0] ? segments[0].inTs : null, outTs: last ? last.outTs : null, breakMs: segments.reduce((a, g) => a + g.breakMs, 0), openBreak: last ? last.openBreak : null, netMs };
 }
+/** เวลาไทย (+07:00 ตายตัว ไม่ขึ้นกับ timezone เครื่อง) */
+const tsOf = (d, hhmm, plusDay) => Date.parse(d + 'T' + hhmm + ':00+07:00') + (plusDay ? 86400000 : 0);
+const dayLabelF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'short', day: 'numeric', month: 'short' });
+const dayLabel = (d) => dayLabelF.format(Date.parse(d + 'T12:00:00+07:00'));
+const dayLongF = new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', weekday: 'long', day: 'numeric', month: 'short' });
+const dayLong = (ms) => dayLongF.format(ms);
 const NEXT = { in: 'working', break_start: 'on_break', break_end: 'working', out: 'done' };
 const LABEL = { in: 'เข้างาน', break_start: 'เริ่มพัก', break_end: 'กลับจากพัก', out: 'ออกงาน' };
 const TL = { in: 'เข้า', break_start: 'พัก', break_end: 'กลับ', out: 'ออก' };
@@ -312,6 +346,10 @@ async function act(type) {
   if (!connected) { render(); return; }
   const st = D.state;
   if (st && typeof st.since === 'number' && serverNow() - st.since < COOLDOWN_MS) { cooldownShown = true; render(); return; }
+  const sset = D.settings || {};
+  if (type === 'in' && sset.calendarEnforced === true && sset.calendarLast && bangkokDate(serverNow()) > sset.calendarLast) {
+    refusal = { title: 'ระบบปฏิทินหมดอายุ', text: 'แจ้งเจ้าของร้านให้ต่ออายุปฏิทิน' }; render(); return;
+  }
   if (type === 'out' && !(await confirmOut())) return;
   busy = 'locating'; render();
   let fix;
@@ -399,6 +437,190 @@ async function reRegister() {
   render();
 }
 
+/* ====== แจ้งแก้เวลา (หน้า D) ====== */
+const CORR_TYPES = { in: 'ลืมกดเข้างาน', out: 'ลืมกดออกงาน', break: 'ลืมกดพัก', break_end: 'ลืมกดกลับจากพัก' };
+const CORR_REASONS = ['ลืมกด', 'มือถือแบตหมด', 'ไม่มีเน็ต', 'หาตำแหน่งไม่ได้', 'ไปทำงานนอกร้าน'];
+let corrView = null;     // null | 'LIST' | 'NEW'
+let corr = null;         // ข้อมูลที่กำลังกรอก
+const correctionDays = () => { const v = Number((D.settings || {}).correctionDays); return v >= 1 && v <= 62 ? Math.floor(v) : 7; };
+const corrSeenKey = 'clock.corrSeen';
+const getSeen = () => { try { return Number(localStorage.getItem(corrSeenKey)) || 0; } catch (_) { return 0; } };
+function corrUnseen() { return Object.values(D.corr || {}).filter((c) => c && c.status !== 'pending' && typeof c.decidedAt === 'number' && c.decidedAt > getSeen()).length; }
+function corrPendingCount() { return Object.values(D.corr || {}).filter((c) => c && c.status === 'pending').length; }
+function markSeen() {
+  const mx = Math.max(0, ...Object.values(D.corr || {}).filter((c) => c && typeof c.decidedAt === 'number').map((c) => c.decidedAt));
+  try { if (mx > getSeen()) localStorage.setItem(corrSeenKey, String(mx)); } catch (_) { }
+}
+function openCorrList() { corrView = 'LIST'; markSeen(); render(); }
+function closeCorr() { corrView = null; corr = null; render(); }
+function openCorrNew(pre) {
+  corr = { step: pre && pre.d ? (pre.type ? 'time' : 'type') : 'day', d: pre && pre.d || null, type: pre && pre.type || null, time: '', endTime: '', nextDay: false, endNextDay: false, reasonBtn: null, reasonText: '', err: '', sending: false, info: {}, inHHMM: null };
+  corrView = 'NEW';
+  loadDayInfo();
+  render();
+}
+function dayShort(sumObj) {
+  if (!sumObj.ev.length) return 'ยังไม่มีรายการ';
+  const first = sumObj.segments[0];
+  return `เข้า ${first ? fmtTime(first.inTs) : '—'} · ออก ${sumObj.outTs != null ? fmtTime(sumObj.outTs) : '—'}`;
+}
+async function loadDayInfo() {
+  if (!me) return;
+  const c = corr;
+  const days = [];
+  for (let i = 0; i <= correctionDays(); i++) days.push(bangkokDate(serverNow() - i * 86400000));
+  const want = c.d ? [c.d] : days;
+  await Promise.all(want.map(async (d) => {
+    try {
+      const snap = await get(A(`logs/${d}/${me.sid}`));
+      const sm = summarize(snap.val());
+      c.info[d] = { text: dayShort(sm), inHHMM: sm.segments[0] ? fmtTime(sm.segments[0].inTs) : null };
+    } catch (_) { c.info[d] = { text: '', inHHMM: null }; }
+    if (corr === c) {
+      if (ui.dayInfo && ui.dayInfo[d]) ui.dayInfo[d].textContent = c.info[d].text;
+      if (c.d === d) c.inHHMM = c.info[d].inHHMM;
+    }
+  }));
+}
+const corrEnd = () => (corr.type === 'break' ? tsOf(corr.d, corr.endTime, corr.endNextDay) : null);
+function corrTimeError() {
+  if (!/^\d\d:\d\d$/.test(corr.time)) return 'ใส่เวลาก่อน';
+  const t1 = tsOf(corr.d, corr.time, corr.nextDay);
+  if (t1 > serverNow()) return 'เวลานี้ยังมาไม่ถึง';
+  if (corr.type === 'break') {
+    if (!/^\d\d:\d\d$/.test(corr.endTime)) return 'ใส่เวลากลับจากพักด้วย';
+    const t2 = corrEnd();
+    if (t2 > serverNow()) return 'เวลากลับจากพักยังมาไม่ถึง';
+    if (t2 <= t1) return 'เวลากลับจากพักต้องหลังเวลาเริ่มพัก';
+  }
+  return '';
+}
+const corrWhen = (d, hhmm, plus) => (/^\d\d:\d\d$/.test(hhmm) ? `= ${dayLong(tsOf(d, hhmm, plus))} เวลา ${hhmm}` : '');
+function corrBack() {
+  if (!corr) return closeCorr();
+  const order = ['day', 'type', 'time', 'reason', 'review'];
+  const i = order.indexOf(corr.step);
+  if (i <= 0) { corrView = 'LIST'; corr = null; render(); return; }
+  corr.step = order[i - 1]; corr.err = ''; render();
+}
+function corrReasonString() {
+  const t = corr.reasonText.trim();
+  return [corr.reasonBtn, t].filter(Boolean).join(' — ');
+}
+async function submitCorr() {
+  if (corr.sending || !me) return;
+  const c = corr;
+  const dup = Object.values(D.corr || {}).some((x) => x && x.status === 'pending' && x.workDate === c.d && x.type === c.type);
+  if (dup) { c.err = 'มีคำขอเรื่องนี้รออยู่แล้ว (ยกเลิกอันเดิมก่อนได้)'; render(); return; }
+  const body = { staffId: me.sid, workDate: c.d, type: c.type, time: c.time, reason: corrReasonString().slice(0, 300), status: 'pending', createdAt: serverTimestamp() };
+  if (c.type === 'break') body.endTime = c.endTime;
+  if (c.nextDay) body.nextDay = true;
+  if (c.type === 'break' && c.endNextDay) body.endNextDay = true;
+  c.sending = true; c.err = ''; render();
+  const p = set(push(A('corrections')), body);
+  const offline = !connected;
+  let failed = false;
+  p.catch(() => { failed = true; if (corr === c) { c.sending = false; c.err = 'ส่งไม่สำเร็จ — ลองใหม่ ถ้ายังไม่ได้ให้แจ้งเจ้าของ'; render(); } });
+  if (!offline) { try { await Promise.race([p, sleep(8000)]); } catch (_) { failed = true; } }
+  if (failed) return;
+  const tick = h('div', { class: 'tick' });
+  tick.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>'; // ข้อความคงที่ ไม่ใช่ข้อมูลจาก DB
+  const done = h('div', { id: 'ov' }, tick, h('div', { class: 'msg' }, offline ? 'จะส่งเมื่อมีเน็ต' : 'ส่งแล้ว รอเจ้าของอนุมัติ'));
+  document.body.append(done);
+  setTimeout(() => done.remove(), 2000);
+  corr = null; corrView = 'LIST'; render();
+}
+async function cancelCorr(id) {
+  const ok = await new Promise((res) => {
+    const close = (v) => { box.remove(); res(v); };
+    const box = h('div', { id: 'cf' }, h('div', { class: 'box' },
+      h('div', { style: 'font-size:26px;font-weight:800;margin-bottom:6px' }, 'ยกเลิกคำขอนี้ใช่ไหม'),
+      h('button', { class: 'btn red', onclick: () => close(true) }, 'ใช่ ยกเลิกคำขอ'),
+      h('button', { class: 'btn gray', onclick: () => close(false) }, 'ไม่ยกเลิก')));
+    document.body.append(box);
+  });
+  if (!ok) return;
+  try { await remove(A('corrections/' + id)); } catch (_) { refusal = { title: 'ยกเลิกไม่สำเร็จ', text: 'ลองใหม่อีกครั้ง' }; }
+  render();
+}
+
+function backBtn(fn, label) { return h('button', { class: 'back', onclick: fn }, label || '← กลับ'); }
+function buildCorrList() {
+  $root.append(backBtn(closeCorr));
+  $root.append(h('div', { class: 'hdr' }, h('span', null, 'คำขอแก้เวลาของฉัน')));
+  $root.append(h('button', { class: 'btn', onclick: () => openCorrNew() }, 'แจ้งแก้เวลาใหม่'));
+  const list = Object.entries(D.corr || {}).filter(([, c]) => c && typeof c === 'object').sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0)).slice(0, 30);
+  if (D.corr === null) $root.append(h('div', { class: 'small' }, 'กำลังโหลด...'));
+  else if (!list.length) $root.append(card(null, h('div', null, 'ยังไม่มีคำขอ')));
+  for (const [id, c] of list) {
+    const st = c.status === 'approved' ? ['a', 'อนุมัติแล้ว'] : c.status === 'rejected' ? ['r', 'ไม่อนุมัติ'] : ['p', 'รออนุมัติ'];
+    const t1 = c.time ? `${c.time}${c.nextDay ? ' (เช้าวันถัดไป)' : ''}` : '';
+    const t2 = c.type === 'break' && c.endTime ? ` – ${c.endTime}${c.endNextDay ? ' (เช้าวันถัดไป)' : ''}` : '';
+    const parts = [h('span', { class: 'stt ' + st[0] }, st[1]), h('div', null, h('b', null, CORR_TYPES[c.type] || c.type), ' · ', c.workDate ? dayLabel(c.workDate) : '', ' · ', t1 + t2), h('div', { class: 'small' }, 'เหตุผล: ', c.reason || '')];
+    if (c.status === 'approved' && typeof c.appliedTs === 'number' && c.workDate && c.time && c.appliedTs !== tsOf(c.workDate, c.time, c.nextDay)) parts.push(h('div', null, 'บันทึกเป็น ' + fmtTime(c.appliedTs)));
+    if (c.resultNote) parts.push(h('div', null, 'เจ้าของ: ', c.resultNote));
+    if (c.status === 'pending') parts.push(h('button', { class: 'btn gray', onclick: () => cancelCorr(id) }, 'ยกเลิกคำขอ'));
+    $root.append(card(null, ...parts));
+  }
+}
+function buildCorrNew() {
+  const c = corr;
+  ui = {};
+  $root.append(backBtn(corrBack));
+  const title = { day: 'เลือกวัน', type: 'ลืมกดอะไร', time: 'ใส่เวลา', reason: 'เหตุผล', review: 'ตรวจแล้วส่ง' }[c.step];
+  $root.append(h('div', { class: 'hdr' }, h('span', null, title)));
+  if (c.step === 'day') {
+    ui.dayInfo = {};
+    $root.append(h('div', { class: 'small' }, 'กะข้ามคืน ให้เลือกวันที่เริ่มกะ'));
+    for (let i = 0; i <= correctionDays(); i++) {
+      const d = bangkokDate(serverNow() - i * 86400000);
+      const nm = i === 0 ? `วันนี้ (${dayLabel(d)})` : i === 1 ? `เมื่อวาน (${dayLabel(d)})` : dayLabel(d);
+      const sub = h('small', null, (c.info[d] && c.info[d].text) || '');
+      ui.dayInfo[d] = sub;
+      $root.append(h('button', { class: 'dayb', onclick: () => { c.d = d; c.inHHMM = (c.info[d] || {}).inHHMM || null; c.step = 'type'; render(); } }, nm, sub));
+    }
+  } else if (c.step === 'type') {
+    $root.append(h('div', { class: 'small' }, dayLabel(c.d)));
+    for (const k of ['in', 'out', 'break', 'break_end']) $root.append(h('button', { class: 'typeb', onclick: () => { c.type = k; c.step = 'time'; c.err = ''; render(); } }, CORR_TYPES[k]));
+  } else if (c.step === 'time') {
+    $root.append(h('div', { class: 'small' }, dayLabel(c.d) + ' · ' + CORR_TYPES[c.type]));
+    const err = h('div', { class: 'err' }); const when = h('div', { class: 'small', style: 'min-height:1.4em' }); const when2 = h('div', { class: 'small', style: 'min-height:1.4em' });
+    const next = h('button', { class: 'btn', onclick: () => { const e = corrTimeError(); if (e) { err.textContent = e; return; } c.step = 'reason'; render(); } }, 'ต่อไป');
+    const upd = () => { when.textContent = corrWhen(c.d, c.time, c.nextDay); when2.textContent = c.type === 'break' ? corrWhen(c.d, c.endTime, c.endNextDay) : ''; err.textContent = ''; };
+    // ตั้ง "หลังเที่ยงคืน" อัตโนมัติเมื่อเวลาน้อยกว่าเวลาเข้างานของวันนั้น
+    const autoNext = (hhmm) => c.type !== 'in' && !!(c.inHHMM && hhmm && hhmm < c.inHHMM);
+    const t1 = h('input', { type: 'time', class: 'timein', '.value': c.time });
+    const cb1 = h('input', { type: 'checkbox', '.checked': c.nextDay });
+    t1.addEventListener('input', () => { c.time = t1.value; c.nextDay = autoNext(c.time); cb1.checked = c.nextDay; upd(); });
+    cb1.addEventListener('change', () => { c.nextDay = cb1.checked; upd(); });
+    $root.append(h('div', { class: 'small' }, c.type === 'break' ? 'เริ่มพัก' : 'เวลา'), t1, h('label', { class: 'chk' }, cb1, 'หลังเที่ยงคืน (เช้าวันถัดไป)'), when);
+    if (c.type === 'break') {
+      const t2 = h('input', { type: 'time', class: 'timein', '.value': c.endTime });
+      const cb2 = h('input', { type: 'checkbox', '.checked': c.endNextDay });
+      t2.addEventListener('input', () => { c.endTime = t2.value; c.endNextDay = autoNext(c.endTime); cb2.checked = c.endNextDay; upd(); });
+      cb2.addEventListener('change', () => { c.endNextDay = cb2.checked; upd(); });
+      $root.append(h('div', { class: 'small' }, 'กลับจากพัก'), t2, h('label', { class: 'chk' }, cb2, 'หลังเที่ยงคืน (เช้าวันถัดไป)'), when2);
+    }
+    $root.append(err, next);
+    upd();
+  } else if (c.step === 'reason') {
+    $root.append(h('div', { class: 'small' }, 'เลือกเหตุผล หรือพิมพ์เอง'));
+    const grid = h('div', { class: 'reasons' }); const btns = [];
+    for (const r of CORR_REASONS) {
+      const b = h('button', { class: c.reasonBtn === r ? 'on' : '', onclick: () => { c.reasonBtn = c.reasonBtn === r ? null : r; btns.forEach((x) => x.classList.toggle('on', x.textContent === c.reasonBtn)); } }, r);
+      btns.push(b); grid.append(b);
+    }
+    const ta = h('textarea', { class: 'rt', maxlength: 200, placeholder: 'พิมพ์เพิ่มเติม (ไม่เกิน 200 ตัวอักษร)', '.value': c.reasonText });
+    ta.addEventListener('input', () => { c.reasonText = ta.value; });
+    const err = h('div', { class: 'err' });
+    $root.append(grid, ta, err, h('button', { class: 'btn', onclick: () => { if (!corrReasonString()) { err.textContent = 'เลือกหรือพิมพ์เหตุผลก่อน'; return; } c.step = 'review'; render(); } }, 'ต่อไป'));
+  } else if (c.step === 'review') {
+    const t = c.type === 'break' ? `${c.time}${c.nextDay ? ' (+1 วัน)' : ''} – ${c.endTime}${c.endNextDay ? ' (+1 วัน)' : ''}` : `${c.time}${c.nextDay ? ' (+1 วัน)' : ''}`;
+    $root.append(card('ขอแก้', h('div', null, h('b', null, CORR_TYPES[c.type]), ' · ', dayLabel(c.d), ' · ', t), h('div', null, 'เหตุผล: ', corrReasonString())));
+    $root.append(h('div', { class: 'err' }, c.err), h('button', { class: 'btn', disabled: c.sending, onclick: submitCorr }, c.sending ? 'กำลังส่ง...' : 'ส่งคำขอ'));
+  }
+}
+
 /* ====== วาดหน้าจอ ====== */
 let lastKey = '';
 let ui = {};
@@ -408,6 +630,8 @@ function currentView() {
   if (me) {
     if (me.s.active === false) return 'DISABLED';
     if (D.state === undefined) return 'LOADING_MAIN';
+    if (corrView === 'LIST') return 'CORR_LIST';
+    if (corrView === 'NEW' && corr) return 'CORR_NEW';
     return 'MAIN';
   }
   if (reg.step === 'submitting') return 'SUBMITTING';
@@ -422,6 +646,8 @@ function currentView() {
 
 function viewKey(v) {
   if (v === 'MAIN') return ['MAIN', mainMode(), busy ? 'b' : '', refusal ? refusal.title : '', cooldownShown ? 'c' : '', connected ? '' : 'off', permState === 'granted' ? '' : permState].join('|');
+  if (v === 'CORR_LIST') return 'CORR_LIST|' + Object.entries(D.corr || {}).map(([k, c]) => k + (c && c.status)).join();
+  if (v === 'CORR_NEW') return 'CORR_NEW|' + corr.step + '|' + (corr.sending ? 's' : '') + corr.err + '|' + (connected ? '' : 'off');
   if (v === 'PIN') return 'PIN' + reg.sid + reg.pin.length + reg.err;
   if (v === 'PICK') return 'PICK' + reg.err + Object.keys(D.staff || {}).join();
   if (v === 'WAITING') return 'WAITING' + (D.req ? D.req.staffId : '');
@@ -449,6 +675,8 @@ function build(v) {
     case 'REJECTED': return $root.append(card('เจ้าของยังไม่อนุมัติ', h('div', null, 'ตรวจว่าเลือกชื่อและใส่รหัสถูก แล้วลงทะเบียนใหม่'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
     case 'REVOKED': return $root.append(card('เครื่องนี้ถูกยกเลิกการผูกแล้ว', h('div', null, 'ลงทะเบียนใหม่เพื่อใช้งานต่อ'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
     case 'MAIN': return buildMain();
+    case 'CORR_LIST': return buildCorrList();
+    case 'CORR_NEW': return buildCorrNew();
   }
 }
 
@@ -531,6 +759,8 @@ function buildMain() {
   if (mode === 'WORKING') $root.append(h('button', { class: 'sec', onclick: () => act('out') }, 'ออกงาน'));
   ui.tl = h('div', { class: 'tl' });
   $root.append(ui.tl);
+  ui.corrBox = h('div');
+  $root.append(ui.corrBox);
 }
 
 function updateDynamic() {
@@ -578,7 +808,8 @@ function updateDynamic() {
 
   // ข้อความแจ้ง
   clear(ui.note);
-  if (mode === 'STALE') ui.note.append(card('กะก่อนยังไม่ได้กดออกงาน', h('div', null, 'แจ้งเจ้าของให้แก้ แล้วกดเข้างานของวันนี้ได้เลย')));
+  if (mode === 'STALE') ui.note.append(card('กะก่อนยังไม่ได้กดออกงาน', h('div', null, 'แจ้งเวลาออกของกะก่อน หรือกดเข้างานของวันนี้ได้เลย'),
+    h('button', { class: 'btn blue', onclick: () => openCorrNew({ d: st.workDate, type: 'out' }) }, 'แจ้งเวลาออกของกะก่อน')));
   if (cooldownShown) {
     const left = st && typeof st.since === 'number' ? Math.ceil((COOLDOWN_MS - (now - st.since)) / 1000) : 0;
     if (left > 0) ui.note.append(card('เพิ่งกดไปเมื่อสักครู่', h('div', null, `รออีก ${left} วินาที`)));
@@ -589,7 +820,14 @@ function updateDynamic() {
   // ไทม์ไลน์
   const ev2 = sum.ev;
   const lab = timelineDate() === bangkokDate(now) ? 'วันนี้' : 'กะวันที่ ' + timelineDate();
-  ui.tl.textContent = ev2.length ? `${lab}: ` + ev2.map((e) => `${TL[e.type]} ${fmtTime(e.ts)}`).join(' · ') : `${lab}: ยังไม่มีรายการ`;
+  ui.tl.textContent = ev2.length ? `${lab}: ` + ev2.map((e) => `${TL[e.type]} ${fmtTime(e.ts)}${e.source === 'admin' ? ' (เจ้าของบันทึก)' : ''}`).join(' · ') : `${lab}: ยังไม่มีรายการ`;
+
+  // แจ้งแก้เวลา: ลิงก์ + สถานะคำขอ
+  clear(ui.corrBox);
+  const unseen = corrUnseen(), pend = corrPendingCount();
+  ui.corrBox.append(h('button', { class: 'btn link', onclick: openCorrList }, 'แจ้งแก้เวลา', unseen ? h('span', { class: 'dot' }) : null));
+  if (unseen) ui.corrBox.append(h('div', { class: 'small', style: 'text-align:center', onclick: openCorrList }, 'เจ้าของตอบคำขอแล้ว — แตะเพื่อดู'));
+  if (pend) ui.corrBox.append(h('div', { class: 'small', style: 'text-align:center' }, `คำขอแก้เวลา รออนุมัติ ${pend} รายการ`));
 }
 
 /* ====== เริ่มทำงาน ====== */

@@ -2,3 +2,4 @@ node_modules/
 *.log
 .firebase/
 tests/database.rules.copy.json
+*.pid
