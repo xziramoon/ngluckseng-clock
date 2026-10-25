@@ -706,7 +706,8 @@ async function seedBranches() {
   const base = { radius: 10, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60, active: true, updatedAt: serverTimestamp() };
   try {
     await update(A(''), {
-      'branches/wongwian': { name: 'สาขาวงเวียน', ...base },
+      // หน้าร้าน 59/9 ถ.เทศบาลดำริ 3 สวรรคโลก (ตรวจกับ Google Maps + ภาพดาวเทียมแล้ว)
+      'branches/wongwian': { name: 'สาขาวงเวียน', ...base, lat: 17.318126, lng: 99.832053 },
       'branches/klongyang': { name: 'สาขาแยกคลองยาง', ...base },
       'settings/lateGraceMin': 5
     });
