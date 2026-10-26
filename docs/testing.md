@@ -1,4 +1,6 @@
-# เช็กลิสต์ทดสอบ (เฟส 1-2)
+# เช็กลิสต์ทดสอบ (เฟส 1-3 + Auth v2)
+
+หมายเหตุ: ระบบล็อกอินถูกเปลี่ยนเป็นชื่อผู้ใช้/รหัสผ่านตาม docs/plan-auth-v2.md (ไม่มีรายชื่อ/PIN/anonymous แล้ว) ข้อความเกี่ยวกับ PIN/ลงทะเบียนแบบเดิมที่เหลือในเอกสารเฟส 1-3 ให้ถือตามข้อ 8 ด้านล่าง
 
 ## 1. เทสกฎอัตโนมัติ
 
@@ -8,7 +10,7 @@ npm install
 npm test
 ```
 
-ต้องมี Java 17 ขึ้นไป (`firebase-tools@14.27.0` ที่ล็อกไว้ใช้ JDK 17 ได้ รุ่น 15 ต้องใช้ JDK 21) ผลที่ต้องได้: `pass 86 / fail 0` = เทสกฎ R1-R60 (เฟส 1 = R1-R28, เฟส 2 = R29-R55, เฟส 3 = R56-R60 ดู docs/plan-phase2.md ข้อ 11 และ plan-phase3.md ข้อ 8) + เทสตรรกะกลาง/รายงาน/CSV 26 เคส (`tests/core.test.mjs` U1-U25) เฉพาะส่วนตรรกะรันเดี่ยวได้โดยไม่ต้องมี Java/emulator: `npm run test:core`
+ต้องมี Java 17 ขึ้นไป (`firebase-tools@14.27.0` ที่ล็อกไว้ใช้ JDK 17 ได้ รุ่น 15 ต้องใช้ JDK 21) ผลที่ต้องได้: `pass 103 / fail 0` = เทสกฎ R1-R77 (เฟส 1 = R1-R28, เฟส 2 = R29-R55, เฟส 3 = R56-R60, Auth v2 = R61-R77 (R77 = devproof ต้องรู้กุญแจ ใช้เป็น leaf `devproof/{sid}/{k}`) และเขียน R2/R3/R4/R15-R18/R21/R27/R53/R59 ใหม่ ดู docs/plan-auth-v2.md ข้อ 10) + เทสตรรกะกลาง/รายงาน/CSV 26 เคส (`tests/core.test.mjs` U1-U25) เฉพาะส่วนตรรกะรันเดี่ยวได้โดยไม่ต้องมี Java/emulator: `npm run test:core`
 
 ## 2. ทดสอบในเครื่อง (หน้าเว็บ + emulator)
 
@@ -22,7 +24,7 @@ npx http-server D:\Claude\ngluckseng-clock -p 8080 -c-1
 ```
 
 - เปิด `http://localhost:8080/clock-master.html?emu=1` และ `http://localhost:8080/clock.html?emu=1` (พารามิเตอร์ `emu=1` ใช้ได้เฉพาะ localhost เท่านั้น จะต่อกับ emulator ไม่แตะฐานข้อมูลจริง)
-- สร้างแอดมินใน Auth emulator: ส่ง `POST http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x` พร้อม `{"email":"boss@test.com","password":"secret12"}` แล้วเขียน `attendance/admins/<localId>` = `true` ด้วย REST (`PUT http://127.0.0.1:9000/attendance/admins/<localId>.json?ns=demo-clock-default-rtdb` พร้อมหัว `Authorization: Bearer owner`)
+- สร้างแอดมินใน Auth emulator (อีเมลจริงรูปแบบ ไม่ใช่โดเมน `@staff.ngluckseng.invalid`): ส่ง `POST http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x` พร้อม `{"email":"boss@test.com","password":"secret12"}` แล้วเขียน `attendance/admins/<localId>` = `true` ด้วย REST (`PUT http://127.0.0.1:9000/attendance/admins/<localId>.json?ns=demo-clock-default-rtdb` พร้อมหัว `Authorization: Bearer owner`)
 - จำลองตำแหน่ง: Chrome DevTools > More tools > Sensors > Location (ใส่พิกัดในและนอกรัศมี และลองตั้ง accuracy ให้แย่)
 - PWA: DevTools > Application > Manifest / Service workers, Network > Offline
 - ทดสอบบนมือถือจริงต้องเป็น HTTPS: push ไป GitHub Pages (หรือ `npx cloudflared tunnel --url http://localhost:8080` ชั่วคราว)
@@ -47,18 +49,18 @@ Playground จำลอง multi-path update ไม่ได้ (ทีละ pa
 | # | ผู้ใช้ (Authenticated / provider) | การกระทำ | ผลที่ต้องได้ |
 |---|---|---|---|
 | R1 | ไม่ล็อกอิน | read `/attendance/staff`, `/attendance/logs` | ปฏิเสธ |
-| R2 | uid ใดๆ, provider `anonymous` | read `/attendance/staff`, `/attendance/branches` | ผ่าน |
-| R3 | anonymous | read `/attendance/staffSecret`, `/attendance/admins`, `/attendance/deviceRequests`, `/attendance/state`, `/attendance/logs/2026-01-01` | ปฏิเสธ |
-| R4 | anonymous ที่ staff ยังไม่ผูก uid | write `/attendance/logs/<วัน>/<sid>/<id>` | ปฏิเสธ |
+| R2 | บัญชี `password` ที่ยังไม่มี `accounts/<uid>` | read `/attendance/staff`, `/attendance/branches` | ปฏิเสธ (ต้องเป็นสมาชิกก่อน); ถ้ามี `accounts/<uid>` เป็นสตริง = ผ่าน |
+| R3 | พนักงาน (มี `accounts/<uid>`) | read `/attendance/deviceKeys`, `/attendance/admins`, `/attendance/deviceRequests`, `/attendance/state`, `/attendance/logs/2026-01-01` | ปฏิเสธ |
+| R4 | บัญชีที่ยังไม่มี `accounts/<uid>` หรือ anonymous | write `/attendance/logs/<วัน>/<sid>/<id>` | ปฏิเสธ |
 | R7 | พนักงานที่อนุมัติแล้ว | write log ที่ `ts` เป็นตัวเลขที่กำหนดเอง | ปฏิเสธ |
 | R8 | พนักงานที่อนุมัติแล้ว | write ทับ หรือ delete log เดิม, delete `/attendance/state/<sid>` | ปฏิเสธ |
 | R12 | พนักงาน A | write log/state ของ B | ปฏิเสธ |
 | R13 | พนักงานที่ `active=false` | write log | ปฏิเสธ |
 | R14 | พนักงาน | write log ที่มี `source:"admin"`, `review`, ฟิลด์แปลก | ปฏิเสธ |
-| R15 | anonymous | write `/attendance/deviceRequests/<uid ตัวเอง>` pending / ของ uid อื่น / status rejected | ผ่าน / ปฏิเสธ / ปฏิเสธ |
-| R16 | anonymous | write `/attendance/staff/<sid>/uid` | ปฏิเสธ |
+| R15 | บัญชี `password` ของพนักงาน | write `/attendance/deviceRequests/<uid ตัวเอง>` (`{info:{kind,did,status:pending,...},key}`) / ของ uid อื่น / status rejected | ผ่าน (ตอนสมัครเปิดอยู่) / ปฏิเสธ / ปฏิเสธ |
+| R16 | พนักงาน | write `/attendance/staff/<sid>/uid` หรือ `accounts/<uid>` ของตัวเอง | ปฏิเสธ |
 | R17 | แอดมิน provider `password` และมี `admins/<uid>=true` | read/write ทุก node ของ attendance | ผ่าน |
-| R18 | uid ที่อยู่ใน admins แต่ provider `anonymous` | read `/attendance/staffSecret` | ปฏิเสธ |
+| R18 | uid ที่อยู่ใน admins แต่ provider `anonymous` หรืออีเมลลงท้าย `@staff.ngluckseng.invalid` | read `/attendance/deviceKeys`, `/attendance/deviceRequests` | ปฏิเสธ |
 
 ### เคสเฟส 2 ที่ลองใน Playground ได้ (ทีละ path)
 
@@ -86,7 +88,7 @@ Playground จำลอง multi-path update ไม่ได้ (ทีละ pa
 
 ## 6. ทดสอบเฟส 2 ด้วย emulator + เบราว์เซอร์ (E1-E18)
 
-เตรียมตามข้อ 2 แล้ว: master `?emu=1` สร้างสาขาเริ่มต้น (วงเวียน 17.318062, 99.832187 รัศมี 10 / แม่นยำ 30 / ชายขอบ x2) พนักงาน เอ และ บี ลงทะเบียนและอนุมัติแล้ว ถ้า DevTools Sensors ตั้ง accuracy ไม่ได้ ให้ seed log ที่มี `flag` ผ่าน REST (`PUT http://127.0.0.1:9000/attendance/logs/<วัน>/<sid>/<id>.json?ns=demo-clock-default-rtdb` พร้อมหัว `Authorization: Bearer owner`) หมายเหตุสำหรับการทดสอบอัตโนมัติด้วย Playwright: การจำลองตำแหน่งของ Chrome ส่งค่าครั้งเดียว ต้องเรียก `context.setGeolocation` ซ้ำทุก ~700 ms ระหว่างที่แอปเก็บตัวอย่าง GPS
+เตรียมตามข้อ 2 แล้ว: master `?emu=1` สร้างสาขาเริ่มต้น (วงเวียน 17.318062, 99.832187 รัศมี 10 / แม่นยำ 30 / ชายขอบ x2) พนักงาน เอ และ บี สมัครและอนุมัติแล้ว (ผ่านฟอร์มสมัครของ clock.html หรือสร้างบัญชีในแท็บพนักงาน) ถ้า DevTools Sensors ตั้ง accuracy ไม่ได้ ให้ seed log ที่มี `flag` ผ่าน REST (`PUT http://127.0.0.1:9000/attendance/logs/<วัน>/<sid>/<id>.json?ns=demo-clock-default-rtdb` พร้อมหัว `Authorization: Bearer owner`) หมายเหตุสำหรับการทดสอบอัตโนมัติด้วย Playwright: การจำลองตำแหน่งของ Chrome ส่งค่าครั้งเดียว ต้องเรียก `context.setGeolocation` ซ้ำทุก ~700 ms ระหว่างที่แอปเก็บตัวอย่าง GPS
 
 | # | ขั้นตอน | ผลที่ต้องเห็น | ผ่าน |
 |---|---|---|---|
@@ -113,7 +115,7 @@ Playground จำลอง multi-path update ไม่ได้ (ทีละ pa
 
 ## 7. ทดสอบเฟส 3: รายงาน CSV และประวัติ (E19-E32)
 
-เตรียม: เปิด emulator ตามข้อ 2 แล้วเขียนข้อมูลตัวอย่างด้วย `node tests/seed-phase3.mjs <เดือนปัจจุบัน YYYY-MM> <เดือนก่อน YYYY-MM> --clean` (สาขาวงเวียนสาขาเดียว กะ 07:00-18:00 ผ่อนผัน 5 นาที พักได้ 60 นาที พนักงาน เอ=`-OAa1`, บี=`-OBb2`, ซี=`-OCc3` ปิดบัญชี PIN 1234) ให้ลงทะเบียนเครื่องของ เอ และ บี ในแอปตามปกติ
+เตรียม: เปิด emulator ตามข้อ 2 แล้วเขียนข้อมูลตัวอย่างด้วย `node tests/seed-phase3.mjs <เดือนปัจจุบัน YYYY-MM> <เดือนก่อน YYYY-MM> --clean` (สาขาวงเวียนสาขาเดียว กะ 07:00-18:00 ผ่อนผัน 5 นาที พักได้ 60 นาที พนักงาน เอ=`-OAa1`, บี=`-OBb2`, ซี=`-OCc3` ปิดบัญชี) seed สร้างบัญชี Auth ให้ด้วย ชื่อผู้ใช้ `nong_a` / `nong_b` / `nong_c` รหัสผ่าน `111111` ถ้าต้องการให้มือถือทดสอบผูกเครื่องไว้แล้วให้เติม `--bind` (พิมพ์บรรทัด `BIND {...}` สำหรับตั้ง `localStorage['clock.dev']`) ไม่เช่นนั้นล็อกอินแล้วกด "ขอใช้เครื่องนี้" แล้วอนุมัติใน master
 
 ### ตัวเลขที่คำนวณมือ (tests/fixtures/phase3.json, ต.ค. 2026 กะ 07:00-18:00 ผ่อนผัน 5)
 
@@ -156,4 +158,29 @@ Playground จำลอง multi-path update ไม่ได้ (ทีละ pa
 
 ## 8. ทดสอบโหมดเดโม (?demo=1)
 
-ไม่ต้องมี emulator: เสิร์ฟโฟลเดอร์ด้วย static server (หรือ GitHub Pages) แล้วเปิด `demo.html` ใน context เดียวกัน 2 แท็บ ตรวจ: แถบ "โหมดทดสอบ" บนทั้งสองหน้า; ลงทะเบียน เอ PIN 1111 > master (admin@demo / demo1234) อนุมัติ > เข้างาน > รอ 30 วินาที > พัก > กลับ > ออกงาน (ยืนยัน) > สถานะวันนี้/รายงานอัปเดตเองโดยไม่รีเฟรช; ส่งออก CSV; รีโหลดแล้วข้อมูลยังอยู่; เลือก GPS "นอกร้าน 50 ม." แล้วกดไม่ได้; "ล้างข้อมูลเดโม" แล้วทุกแท็บเริ่มใหม่ และเปิด `clock.html` โดยไม่มี `?demo=1` ต้องไม่โหลดโค้ดเดโม
+ไม่ต้องมี emulator: เสิร์ฟโฟลเดอร์ด้วย static server (หรือ GitHub Pages) แล้วเปิด `demo.html` ใน context เดียวกัน 2 แท็บ ตรวจ: แถบ "โหมดทดสอบ" บนทั้งสองหน้า; สมัคร `nok` / `123456` > master (admin@demo / demo1234) อนุมัติการ์ดสมัคร > เข้างาน > รอ 30 วินาที > พัก > กลับ > ออกงาน (ยืนยัน) > สถานะวันนี้/รายงานอัปเดตเองโดยไม่รีเฟรช; ส่งออก CSV; รีโหลดแล้วข้อมูลยังอยู่; เลือก GPS "นอกร้าน 50 ม." แล้วกดไม่ได้; "ล้างข้อมูลเดโม" แล้วทุกแท็บเริ่มใหม่ และเปิด `clock.html` โดยไม่มี `?demo=1` ต้องไม่โหลดโค้ดเดโม; ออกจากระบบแล้วล็อกอิน `nong_b` / `222222` (ผูกเครื่องแล้ว) ลงเวลาได้ทันที; "จำลองมือถือเครื่องใหม่" แล้วล็อกอิน `nong_a` / `111111` > ขอใช้เครื่องนี้ > เจ้าของอนุมัติ; `nong_c` ขึ้น DISABLED
+
+## 8. ทดสอบระบบล็อกอินใหม่ Auth v2 (E1-E16, docs/plan-auth-v2.md ข้อ 10)
+
+เตรียม: emulator auth + database ตามข้อ 2 (ใช้ `?emu=1`) สร้างแอดมินด้วยอีเมลจริงรูปแบบ (ไม่ใช่โดเมน `@staff.ngluckseng.invalid`) เบราว์เซอร์/โปรไฟล์คนละอันแทนมือถือ 1 และ 2 ตั้งตำแหน่งใน Sensors ให้อยู่ในรัศมี
+
+| # | ขั้นตอน | ผลที่ต้องเห็น | ผ่าน |
+|---|---|---|---|
+| E1 | มือถือ 1 สมัคร `nok` / ชื่อเล่น "นก" / `123456` | WAIT_ACCOUNT; master มีการ์ดสมัคร (ตัวเลขบนแท็บ +1) | [ ] |
+| E2 | master เลือกสาขา/กะ แล้วอนุมัติ | มือถือ 1 เข้า MAIN เองภายใน 2 วิ; กด in/พัก/กลับ/ออกได้ | [ ] |
+| E3 | สมัครชื่อซ้ำ `nok` จากมือถือ 2 | "ชื่อผู้ใช้นี้มีคนใช้แล้ว…" | [ ] |
+| E4 | มือถือ 2 ล็อกอิน `nok` | NEW_DEVICE; หลังกด "ขอใช้เครื่องนี้" มือถือ 1 ขึ้นแถบเหลือง; ก่อนอนุมัติมือถือ 2 ไม่มีปุ่มลงเวลา (ยิง update เองต้องได้ PERMISSION_DENIED) | [ ] |
+| E5 | master อนุมัติเครื่องของมือถือ 2 (ป้าย "จะแทนเครื่องเดิม") | มือถือ 2 เข้า MAIN; มือถือ 1 เป็น REPLACED กดไม่ได้ | [ ] |
+| E6 | มือถือ 1 / 2 ออกจากระบบแล้วล็อกอินใหม่ | มือถือ 1 ยังเป็น REPLACED; มือถือ 2 เข้า MAIN ทันที | [ ] |
+| E7 | ล้างข้อมูลไซต์ของมือถือ 2 | ต้องล็อกอินใหม่ แล้วเป็น NEW_DEVICE | [ ] |
+| E8 | ลืมรหัส: มือถือ 2 > ลืมรหัสผ่าน > สมัคร `nok2` > master เชื่อมกับ "นก" | มือถือ 2 เข้า MAIN; ประวัติเดิมอยู่; หน้าต่างที่ล็อกอิน `nok` ค้างอยู่เป็น ACCOUNT_MOVED | [ ] |
+| E9 | master > พนักงาน > สร้างบัญชี `dao` / `654321` | แอดมินไม่หลุด; มือถือล็อกอิน `dao` > NEW_DEVICE > อนุมัติ > MAIN | [ ] |
+| E10 | master > ตั้งบัญชีใหม่ (ลืมรหัส) ให้ `dao` เป็น `dao2` | เครื่องที่ล็อกอิน `dao` เป็น ACCOUNT_MOVED; ล็อกอิน `dao2` เข้า MAIN ทันที | [ ] |
+| E11 | ปิดรับสมัคร แล้วสมัครชื่อใหม่ | "ร้านปิดรับสมัครชั่วคราว" และบัญชีที่เพิ่งสร้างถูกลบ | [ ] |
+| E12 | ปิดบัญชี "นก" ระหว่างกะ | มือถือขึ้น DISABLED | [ ] |
+| E13 | ใส่ uid ของ `nok2` ลง `admins` ด้วย REST แล้วล็อกอิน master ด้วย `nok2@staff.ngluckseng.invalid` | "บัญชีนี้ไม่มีสิทธิ์เจ้าของร้าน" | [ ] |
+| E14 | regression เฟส 2-3 (คำขอแก้เวลา, แก้/ยืนยันวัน, รายงาน/CSV, ประวัติ 30 วัน) | ทำงานเหมือนเดิม | [ ] |
+| E15 | `?demo=1` ทั้งสองหน้า ตาม demo.html | ทำได้ทุกขั้นตอน | [ ] |
+| E16 | มือถือจริง: iPhone ติดตั้งก่อนแล้วสมัครในแอป / Android Chrome | ลงทะเบียนจนเข้างานได้ภายใน 1 นาที (รวมเวลาอนุมัติ) | [ ] |
+
+สถานะการรัน: E1-E15 รันอัตโนมัติด้วย Playwright (Edge) บน emulator แล้ว; E16 (มือถือจริง) และการยอมรับโดเมน `.invalid` ของ Firebase จริงยังไม่ได้ทดสอบ

@@ -3,8 +3,8 @@
   "branch": { "id": "wongwian", "name": "สาขาวงเวียน", "lat": 17.318062, "lng": 99.832187, "radius": 10, "maxAccuracy": 30, "graceFactor": 2, "breakLimitMin": 60 },
   "settings": { "lateGraceMin": 5 },
   "staff": [
-    { "key": "A", "sid": "-OAa1", "nickname": "เอ", "shiftStart": "07:00", "shiftEnd": "18:00" },
-    { "key": "B", "sid": "-OBb2", "nickname": "บี", "shiftStart": "07:00", "shiftEnd": "18:00" }
+    { "key": "A", "sid": "-OAa1", "nickname": "เอ", "username": "nong_a", "shiftStart": "07:00", "shiftEnd": "18:00" },
+    { "key": "B", "sid": "-OBb2", "nickname": "บี", "username": "nong_b", "shiftStart": "07:00", "shiftEnd": "18:00" }
   ],
   "days": [
     { "day": 1, "staff": "A", "confirmed": true, "logs": [["in", "07:12"], ["break_start", "12:00"], ["break_end", "13:10"], ["out", "18:05"]] },

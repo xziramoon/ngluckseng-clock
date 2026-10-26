@@ -1,4 +1,4 @@
-// ทดสอบ Security Rules ของ attendance/ ด้วย Firebase Emulator (เคส R1-R28 ใน docs/plan-phase1.md ข้อ 7.2, R29-R48 ใน docs/plan-phase2.md ข้อ 11)
+// ทดสอบ Security Rules ของ attendance/ ด้วย Firebase Emulator (R1-R28 ใน docs/plan-phase1.md ข้อ 7.2, R29-R55 ใน docs/plan-phase2.md ข้อ 11, R56-R60 เฟส 3, R61-R76 ใน docs/plan-auth-v2.md ข้อ 10)
 // รัน: cd tests && npm test
 import { test, before, after, beforeEach, describe } from 'node:test';
 import fs from 'node:fs';
@@ -22,8 +22,17 @@ before(async () => {
 });
 after(async () => { await env?.cleanup(); });
 
-const anon = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'anonymous' } }).database();
-const admin = () => env.authenticatedContext('adm', { firebase: { sign_in_provider: 'password' } }).database();
+const DOM = '@staff.ngluckseng.invalid';
+const UN = { u1: 'nong_a', u2: 'nong_b', u3: 'nong_c', u5: 'nong_e', u7: 'nong_a2', u9: 'newbie', u10: 'dao' };
+const KEYOF = { s1: 'a'.repeat(43), s2: 'b'.repeat(43), s3: 'c'.repeat(43) };
+const DID = { s1: 'did_s1_000000000000', s2: 'did_s2_000000000000', s3: 'did_s3_000000000000' };
+const KEY9 = 'k'.repeat(43), DID9 = 'did_u9_00000000000000';
+/** พนักงาน = password + อีเมลสังเคราะห์โดเมนพนักงาน */
+const staffDb = (uid) => env.authenticatedContext(uid, { email: (UN[uid] || uid) + DOM, firebase: { sign_in_provider: 'password' } }).database();
+/** คนนอกที่สมัครบัญชีรหัสผ่านเองด้วยอีเมลทั่วไป */
+const stranger = (uid) => env.authenticatedContext(uid, { email: uid + '@gmail.com', firebase: { sign_in_provider: 'password' } }).database();
+const anonDb = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'anonymous' } }).database();
+const admin = () => env.authenticatedContext('adm', { email: 'boss@test.com', firebase: { sign_in_provider: 'password' } }).database();
 const adminEmail = () => env.authenticatedContext('adm', { email: 'boss@test.com', firebase: { sign_in_provider: 'password' } }).database();
 const anonAsAdminUid = () => env.authenticatedContext('adm', { firebase: { sign_in_provider: 'anonymous' } }).database();
 const guest = () => env.unauthenticatedContext().database();
@@ -36,17 +45,34 @@ beforeEach(async () => {
   await seed(async (db) => {
     await set(ref(db, A('admins/adm')), true);
     await set(ref(db, A('branches/b1')), { name: 'สาขาทดสอบ', lat: 13.7, lng: 100.5, radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60, active: true });
-    await set(ref(db, A('staff/s1')), { nickname: 'เอ', branchId: 'b1', shiftStart: '08:00', active: true, uid: 'u1', deviceApproved: true });
-    await set(ref(db, A('staff/s2')), { nickname: 'บี', branchId: 'b1', shiftStart: '08:00', active: true, uid: 'u2', deviceApproved: true });
-    await set(ref(db, A('staff/s3')), { nickname: 'ซี', branchId: 'b1', shiftStart: '08:00', active: false, uid: 'u3', deviceApproved: true });
-    await set(ref(db, A('staff/s4')), { nickname: 'ดี', branchId: 'b1', shiftStart: '08:00', active: true });
-    await set(ref(db, A('staff/s5')), { nickname: 'อี', branchId: 'b1', shiftStart: '08:00', active: true, uid: 'u5', deviceApproved: false });
-    await set(ref(db, A('staffSecret/s1')), { pinHash: HASH_A });
+    const st = (n, un, o = {}) => set(ref(db, A('staff/' + n)), { nickname: o.nick, username: un, branchId: 'b1', shiftStart: '08:00', active: o.active !== false, ...o.f });
+    await st('s1', 'nong_a', { nick: 'เอ', f: { uid: 'u1', deviceId: DID.s1 } });
+    await st('s2', 'nong_b', { nick: 'บี', f: { uid: 'u2', deviceId: DID.s2 } });
+    await st('s3', 'nong_c', { nick: 'ซี', active: false, f: { uid: 'u3', deviceId: DID.s3 } });
+    await st('s4', 'nong_d', { nick: 'ดี' });
+    await st('s5', 'nong_e', { nick: 'อี', f: { uid: 'u5' } });          // มีบัญชีแต่ยังไม่ผูกเครื่อง
+    for (const [u, sid] of [['u1', 's1'], ['u2', 's2'], ['u3', 's3'], ['u5', 's5']]) await set(ref(db, A('accounts/' + u)), sid);
+    for (const sid of ['s1', 's2', 's3']) await set(ref(db, A('deviceKeys/' + sid)), { k: KEYOF[sid], did: DID[sid], at: 1 });
   });
 });
 
 /** ประกอบ multi-path update แบบเดียวกับที่ clock.html ส่ง */
-function build(db, { sid, uid, type, d = TODAY, prev = null, extraLog = {}, stateOverride = {}, logOverride = {} }) {
+/** devproof ที่ clock.html ส่งมาด้วยทุกการเขียน (proof=false ไม่ส่ง, {k} = กุญแจที่กำหนด) */
+const proofOf = (sid, proof = true) => (proof === false ? {} : { [A(`devproof/${sid}/${(proof && proof.k) || KEYOF[sid] || 'z'.repeat(43)}`)]: serverTimestamp() });
+const corrCreate = (db, cid, body, { proof = true } = {}) => update(ref(db), { [A(`corrections/${cid}`)]: body, ...proofOf(body.staffId, proof) });
+const corrDelete = (db, cid, sid, { proof = true } = {}) => update(ref(db), { [A(`corrections/${cid}`)]: null, ...proofOf(sid, proof) });
+const regReq = (over = {}, infoOver = {}) => ({ info: { kind: 'register', did: DID9, status: 'pending', requestedAt: serverTimestamp(), username: 'newbie', nickname: 'ใหม่', userAgent: 'UA', standalone: true, ...infoOver }, key: KEY9, ...over });
+/** อนุมัติคำขอสมัคร: staff + accounts + deviceKeys + ลบคำขอ ใน update เดียว */
+function approveReg(o = {}) {
+  const sid = o.sid || 's9', uid = o.uid || 'u9';
+  const staff = { nickname: 'ใหม่', username: 'newbie', branchId: 'b1', shiftStart: '07:00', shiftEnd: '18:00', active: true, uid, deviceId: DID9, deviceAt: serverTimestamp(), createdAt: serverTimestamp(), ...(o.staff || {}) };
+  for (const k of Object.keys(staff)) if (staff[k] === undefined) delete staff[k];
+  return {
+    [A(`staff/${sid}`)]: staff, [A(`accounts/${uid}`)]: o.accountsSid || sid,
+    [A(`deviceKeys/${sid}`)]: { k: KEY9, did: DID9, at: serverTimestamp(), ...(o.keys || {}) }, [A(`deviceRequests/${uid}`)]: null,
+  };
+}
+function build(db, { sid, uid, type, d = TODAY, prev = null, extraLog = {}, stateOverride = {}, logOverride = {}, proof = true }) {
   const lid = push(ref(db, A(`logs/${d}/${sid}`))).key;
   const log = { type, ts: serverTimestamp(), lat: 13.7, lng: 100.5, accuracy: 20, distance: 10, branchId: 'b1', uid, source: 'app', clientTs: Date.now(), ...extraLog, ...logOverride };
   const NEXT = { in: 'working', break_start: 'on_break', break_end: 'working', out: 'done' };
@@ -55,7 +81,7 @@ function build(db, { sid, uid, type, d = TODAY, prev = null, extraLog = {}, stat
     inAt: type === 'in' ? serverTimestamp() : prev?.inAt,
     lastLogId: lid, lastLat: 13.7, lastLng: 100.5, lastBranchId: 'b1', ...stateOverride,
   };
-  return { lid, updates: { [A(`logs/${d}/${sid}/${lid}`)]: log, [A(`state/${sid}`)]: st } };
+  return { lid, updates: { [A(`logs/${d}/${sid}/${lid}`)]: log, [A(`state/${sid}`)]: st, ...proofOf(sid, proof) } };
 }
 const send = (db, o) => update(ref(db), build(db, o).updates);
 
@@ -125,51 +151,57 @@ describe('Security Rules attendance/', () => {
     await assertFails(get(ref(db, A('branches'))));
   });
 
-  test('R2 anonymous: อ่าน staff, branches ได้', async () => {
-    const db = anon('u9');
-    await assertSucceeds(get(ref(db, A('staff'))));
+  test('R2 สมาชิก (มีบัญชี) อ่าน branches, settings และ staff ของตัวเองได้; staff ทั้งก้อนอ่านไม่ได้', async () => {
+    const db = staffDb('u1');
     await assertSucceeds(get(ref(db, A('branches'))));
     await assertSucceeds(get(ref(db, A('settings'))));
+    await assertSucceeds(get(ref(db, A('staff/s1'))));
+    await assertFails(get(ref(db, A('staff'))));
+    await assertFails(get(ref(db, A('staff/s2'))));
   });
 
-  test('R3 anonymous: อ่าน staffSecret, admins, deviceRequests, state, logs ไม่ได้', async () => {
+  test('R3 ผู้ไม่ใช่แอดมิน: อ่าน admins, deviceRequests, state, logs, audit, days, accounts, deviceKeys, devproof ไม่ได้', async () => {
     await setState('s1', WORKING());
-    const db = anon('u9');
-    await assertFails(get(ref(db, A('staffSecret'))));
-    await assertFails(get(ref(db, A('staffSecret/s1'))));
-    await assertFails(get(ref(db, A('admins'))));
-    await assertFails(get(ref(db, A('deviceRequests'))));
-    await assertFails(get(ref(db, A('state'))));
-    await assertFails(get(ref(db, A('state/s1'))));
-    await assertFails(get(ref(db, A(`logs/${TODAY}`))));
-    await assertFails(get(ref(db, A(`logs/${TODAY}/s1`))));
-    await assertFails(get(ref(db, A('audit'))));
-    await assertFails(get(ref(db, A('days'))));
+    for (const db of [staffDb('u9'), anonDb('u9'), stranger('x1')]) {
+      await assertFails(get(ref(db, A('admins'))));
+      await assertFails(get(ref(db, A('deviceRequests'))));
+      await assertFails(get(ref(db, A('state'))));
+      await assertFails(get(ref(db, A('state/s1'))));
+      await assertFails(get(ref(db, A(`logs/${TODAY}`))));
+      await assertFails(get(ref(db, A(`logs/${TODAY}/s1`))));
+      await assertFails(get(ref(db, A('audit'))));
+      await assertFails(get(ref(db, A('days'))));
+      await assertFails(get(ref(db, A('accounts'))));
+      await assertFails(get(ref(db, A('deviceKeys'))));
+      await assertFails(get(ref(db, A('devproof'))));
+    }
+    await assertFails(get(ref(guest(), A('branches'))));
     // เจ้าของเครื่องอ่าน state ของตัวเองได้ แต่ไม่ใช่ของคนอื่น
-    await assertSucceeds(get(ref(anon('u1'), A('state/s1'))));
-    await assertFails(get(ref(anon('u2'), A('state/s1'))));
+    await assertSucceeds(get(ref(staffDb('u1'), A('state/s1'))));
+    await assertFails(get(ref(staffDb('u2'), A('state/s1'))));
     // admins/{uid} อ่านได้เฉพาะของตัวเอง
-    await assertSucceeds(get(ref(anon('u9'), A('admins/u9'))));
-    await assertFails(get(ref(anon('u9'), A('admins/adm'))));
+    await assertSucceeds(get(ref(staffDb('u9'), A('admins/u9'))));
+    await assertFails(get(ref(staffDb('u9'), A('admins/adm'))));
   });
 
-  test('R4 เครื่องที่ยังไม่อนุมัติ/ไม่ใช่เจ้าของ เขียน log+state ไม่ได้', async () => {
-    await assertFails(send(anon('u9'), { sid: 's1', uid: 'u9', type: 'in' }));       // uid ไม่ตรง
-    await assertFails(send(anon('u9'), { sid: 's4', uid: 'u9', type: 'in' }));       // staff ยังไม่ผูกเครื่อง
-    await assertFails(send(anon('u5'), { sid: 's5', uid: 'u5', type: 'in' }));       // ผูกแล้วแต่ deviceApproved=false
+  test('R4 เขียน log+state ไม่ได้: ไม่มีกุญแจเครื่อง (s5), ไม่มี uid (s4), uid ไม่ตรง, guest, anonymous', async () => {
+    await assertFails(send(staffDb('u9'), { sid: 's1', uid: 'u9', type: 'in' }));         // uid ไม่ตรง
+    await assertFails(send(staffDb('u9'), { sid: 's4', uid: 'u9', type: 'in' }));         // staff ยังไม่มีเจ้าของ
+    await assertFails(send(staffDb('u5'), { sid: 's5', uid: 'u5', type: 'in' }));         // ผูกบัญชีแล้วแต่ยังไม่มี deviceKeys
     await assertFails(send(guest(), { sid: 's1', uid: 'x', type: 'in' }));
+    await assertFails(send(anonDb('uanon'), { sid: 's1', uid: 'uanon', type: 'in' }));            // anonymous ไม่มีสิทธิ์พนักงานแล้ว
   });
 
   test('R5 พนักงานที่อนุมัติแล้ว: in ที่ถูกต้องผ่าน (และ in ครั้งแรกที่มี flag)', async () => {
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
     const snap = await seedGet('state/s1');
     if (snap.status !== 'working') throw new Error('state ไม่เป็น working');
     await seed((db) => remove(ref(db, A('state/s1'))));
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in', extraLog: { flag: 'borderline', flagReason: 'x' } }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in', extraLog: { flag: 'borderline', flagReason: 'x' } }));
   });
 
   test('R6 log โดยไม่มี state / state โดยไม่มี log ต้องถูกปฏิเสธ', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     const { lid, updates } = build(db, { sid: 's1', uid: 'u1', type: 'in' });
     await assertFails(update(ref(db), { [A(`logs/${TODAY}/s1/${lid}`)]: updates[A(`logs/${TODAY}/s1/${lid}`)] }));
     await assertFails(update(ref(db), { [A('state/s1')]: updates[A('state/s1')] }));
@@ -181,7 +213,7 @@ describe('Security Rules attendance/', () => {
   });
 
   test('R7 ts เป็นเลขที่กำหนดเอง ต้องถูกปฏิเสธ', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', logOverride: { ts: Date.now() - 7200000 } }));
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', logOverride: { ts: Date.now() - 5000 } }));
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', stateOverride: { since: Date.now() - 5000 } }));
@@ -189,7 +221,7 @@ describe('Security Rules attendance/', () => {
   });
 
   test('R8 เขียนทับ/ลบ log เดิม, ลบ state ไม่ได้', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     const b = build(db, { sid: 's1', uid: 'u1', type: 'in' });
     await assertSucceeds(update(ref(db), b.updates));
     const logPath = A(`logs/${TODAY}/s1/${b.lid}`);
@@ -205,14 +237,14 @@ describe('Security Rules attendance/', () => {
   test('R9 break_start ภายใน 30 วิหลัง in ถูกปฏิเสธ', async () => {
     await setState('s1', WORKING({ since: Date.now() - 5000 }));
     const prev = (await seedGet('state/s1'));
-    await assertFails(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev }));
+    await assertFails(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev }));
     await setState('s1', WORKING({ since: Date.now() - 40000 }));
     const prev2 = await seedGet('state/s1');
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev: prev2 }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev: prev2 }));
   });
 
   test('R10 ลำดับสถานะผิดถูกปฏิเสธ', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     // out ขณะ on_break
     await setState('s1', WORKING({ status: 'on_break' }));
     let prev = await seedGet('state/s1');
@@ -243,7 +275,7 @@ describe('Security Rules attendance/', () => {
   });
 
   test('R11 in -> break_start -> break_end -> out ผ่านทุกขั้น', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     const age = () => seed((adb) => update(ref(adb, A('state/s1')), { since: Date.now() - 60000 }));
     await assertSucceeds(send(db, { sid: 's1', uid: 'u1', type: 'in' }));
     await age();
@@ -266,26 +298,26 @@ describe('Security Rules attendance/', () => {
     // ข้ามเที่ยงคืน: break/out ใช้ workDate เดิมของ state ได้แม้ไม่ใช่วันนี้
     await setState('s2', WORKING({ workDate: YESTERDAY }));
     prev = await seedGet('state/s2');
-    await assertSucceeds(send(anon('u2'), { sid: 's2', uid: 'u2', type: 'break_start', d: YESTERDAY, prev }));
+    await assertSucceeds(send(staffDb('u2'), { sid: 's2', uid: 'u2', type: 'break_start', d: YESTERDAY, prev }));
   });
 
   test('R12 พนักงาน A เขียน log/state ของ B ไม่ได้', async () => {
-    await assertFails(send(anon('u1'), { sid: 's2', uid: 'u1', type: 'in' }));
-    await assertFails(send(anon('u1'), { sid: 's2', uid: 'u2', type: 'in' }));
-    await assertFails(send(anon('u1'), { sid: 's1', uid: 'u2', type: 'in' })); // uid ใน log ไม่ตรง auth
+    await assertFails(send(staffDb('u1'), { sid: 's2', uid: 'u1', type: 'in' }));
+    await assertFails(send(staffDb('u1'), { sid: 's2', uid: 'u2', type: 'in' }));
+    await assertFails(send(staffDb('u1'), { sid: 's1', uid: 'u2', type: 'in' })); // uid ใน log ไม่ตรง auth
   });
 
   test('R13 active=false: in ไม่ได้', async () => {
-    await assertFails(send(anon('u3'), { sid: 's3', uid: 'u3', type: 'in' }));
+    await assertFails(send(staffDb('u3'), { sid: 's3', uid: 'u3', type: 'in' }));
     // ปิดบัญชีกลางกะ ก็เขียนต่อไม่ได้
     await setState('s1', WORKING());
     const prev = await seedGet('state/s1');
     await seed((db) => update(ref(db, A('staff/s1')), { active: false }));
-    await assertFails(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev }));
+    await assertFails(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev }));
   });
 
   test('R14 source:admin, review, ฟิลด์แปลกปลอม ถูกปฏิเสธ', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', logOverride: { source: 'admin' } }));
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', extraLog: { review: 'approved' } }));
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', extraLog: { hacker: 1 } }));
@@ -296,44 +328,29 @@ describe('Security Rules attendance/', () => {
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', d: '2026-13-45' }));
   });
 
-  test('R15 deviceRequests: สร้างของตัวเอง pending ผ่าน; ของคนอื่น/ตั้ง status เอง ไม่ผ่าน', async () => {
-    const db = anon('u9');
-    const body = (over = {}) => ({ staffId: 's4', pinHash: HASH_A, requestedAt: serverTimestamp(), status: 'pending', userAgent: 'UA', ...over });
-    await assertSucceeds(set(ref(db, A('deviceRequests/u9')), body()));
-    await assertSucceeds(get(ref(db, A('deviceRequests/u9'))));
-    await assertFails(set(ref(db, A('deviceRequests/other')), body()));
-    await assertFails(get(ref(db, A('deviceRequests/other'))));
-    await assertFails(set(ref(anon('u8'), A('deviceRequests/u8')), body({ status: 'rejected' })));
-    await assertFails(set(ref(anon('u8'), A('deviceRequests/u8')), body({ status: 'approved' })));
-    await assertFails(set(ref(anon('u8'), A('deviceRequests/u8')), body({ requestedAt: 12345 })));
-    await assertFails(set(ref(anon('u8'), A('deviceRequests/u8')), body({ staffId: 's3' })));      // staff ปิดบัญชี
-    await assertFails(set(ref(anon('u8'), A('deviceRequests/u8')), body({ staffId: 'nope' })));
-    await assertFails(set(ref(anon('u8'), A('deviceRequests/u8')), body({ pinHash: '1234' })));
-    // ทับคำขอ pending เดิมไม่ได้ / แก้ status เองไม่ได้
-    await assertFails(set(ref(db, A('deviceRequests/u9')), body({ staffId: 's1' })));
-    await assertFails(update(ref(db, A('deviceRequests/u9')), { status: 'approved' }));
-    // ลบของตัวเองได้
-    await assertSucceeds(remove(ref(db, A('deviceRequests/u9'))));
-    // หลังถูก rejected (admin) ลงทะเบียนใหม่ได้
-    await assertSucceeds(set(ref(db, A('deviceRequests/u9')), body()));
-    await assertSucceeds(update(ref(admin(), A('deviceRequests/u9')), { status: 'rejected' }));
-    await assertSucceeds(set(ref(db, A('deviceRequests/u9')), body()));
+  test('R15 [เลิกใช้ แทนด้วย R62-R65] deviceRequests แบบ PIN ถูกถอดออก: คำขอรูปแบบเดิมต้องถูกปฏิเสธ', async () => {
+    const db = staffDb('u9');
+    await assertFails(set(ref(db, A('deviceRequests/u9')), { staffId: 's4', pinHash: HASH_A, requestedAt: serverTimestamp(), status: 'pending', userAgent: 'UA' }));
   });
 
-  test('R16 anonymous เขียน staff/{sid}/uid เองไม่ได้', async () => {
-    const db = anon('u9');
-    await assertFails(set(ref(db, A('staff/s4/uid')), 'u9'));
-    await assertFails(update(ref(db, A('staff/s4')), { uid: 'u9', deviceApproved: true }));
-    await assertFails(set(ref(db, A('staff/s1/active')), false));
+  test('R16 ผู้ใช้เขียน staff/{sid}/uid, accounts, deviceKeys ของตัวเองไม่ได้', async () => {
+    for (const db of [staffDb('u9'), stranger('x1')]) {
+      await assertFails(set(ref(db, A('staff/s4/uid')), 'u9'));
+      await assertFails(update(ref(db, A('staff/s4')), { uid: 'u9' }));
+      await assertFails(set(ref(db, A('accounts/u9')), 's4'));
+      await assertFails(set(ref(db, A('deviceKeys/s4')), { k: 'k'.repeat(43), did: 'did_x_00000000000000', at: serverTimestamp() }));
+    }
+    await assertFails(set(ref(staffDb('u1'), A('staff/s1/active')), false));
   });
 
-  test('R17 แอดมิน (password): อ่าน/เขียนได้ และอนุมัติเครื่อง', async () => {
+  test('R17 แอดมิน (password + อีเมลปกติ): อ่าน/เขียนได้ อนุมัติคำขอสมัคร (update เดียว) แล้วพนักงานลงเวลาได้ และยกเลิกผูกเครื่อง', async () => {
     const db = admin();
-    await assertSucceeds(get(ref(db, A('staffSecret'))));
     await assertSucceeds(get(ref(db, A('deviceRequests'))));
     await assertSucceeds(get(ref(db, A('state'))));
     await assertSucceeds(get(ref(db, A('logs'))));
     await assertSucceeds(get(ref(db, A('admins'))));
+    await assertSucceeds(get(ref(db, A('accounts'))));
+    await assertFails(get(ref(db, A('deviceKeys'))));          // แม้แต่แอดมินก็อ่านกุญแจไม่ได้
     await assertSucceeds(set(ref(db, A('branches/b2')), { name: 'สาขา 2', radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60, active: true }));
     await assertSucceeds(set(ref(db, A('settings/lateGraceMin')), 5));
     await assertSucceeds(update(ref(db, A('branches/b1')), { radius: 120, lat: 13.71, lng: 100.51 }));
@@ -341,40 +358,30 @@ describe('Security Rules attendance/', () => {
     await assertSucceeds(set(ref(db, A('branches/b4')), { name: 'x', radius: 10, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
     await assertFails(set(ref(db, A('branches/b5')), { name: 'x', radius: 5, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
     await assertFails(set(ref(db, A('branches/BAD ID')), { name: 'x', radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
-    // เพิ่มพนักงาน (multi-path staff + staffSecret)
-    await assertSucceeds(update(ref(db), {
-      [A('staff/s9')]: { nickname: 'ใหม่', branchId: 'b1', shiftStart: '08:30', active: true, createdAt: serverTimestamp() },
-      [A('staffSecret/s9')]: { pinHash: HASH_A },
-    }));
-    // อนุมัติเครื่อง
-    await set(ref(anon('u4'), A('deviceRequests/u4')), { staffId: 's4', pinHash: HASH_A, requestedAt: serverTimestamp(), status: 'pending', userAgent: 'UA' });
-    await assertSucceeds(get(ref(db, A('deviceRequests/u4'))));
-    await assertSucceeds(update(ref(db), {
-      [A('staff/s4/uid')]: 'u4', [A('staff/s4/deviceApproved')]: true, [A('staff/s4/deviceApprovedAt')]: serverTimestamp(),
-      [A('deviceRequests/u4')]: null,
-    }));
-    // หลังอนุมัติ s4 ลงเวลาได้
-    await assertSucceeds(send(anon('u4'), { sid: 's4', uid: 'u4', type: 'in' }));
+    // อนุมัติคำขอสมัคร (staff + accounts + deviceKeys + ลบคำขอ)
+    await set(ref(staffDb('u9'), A('deviceRequests/u9')), regReq());
+    await assertSucceeds(update(ref(db), approveReg({ sid: 's9' })));
+    await assertSucceeds(send(staffDb('u9'), { sid: 's9', uid: 'u9', type: 'in', proof: { k: KEY9 } }));
     // ยกเลิกผูกเครื่อง
-    await assertSucceeds(update(ref(db, A('staff/s4')), { uid: null, deviceApproved: false }));
-    // เฟส 2: admin เขียน state ได้เฉพาะพร้อม audit ใหม่ใน update เดียว + prevLogId ('-' เมื่อยังไม่มี state)
+    await assertSucceeds(update(ref(db), { [A('deviceKeys/s9')]: null, [A('staff/s9/deviceId')]: null, [A('staff/s9/deviceAt')]: null }));
+    // เฟส 2: แอดมินเขียน state ได้เฉพาะพร้อม audit + prevLogId ('-' เมื่อยังไม่มี state)
     await assertFails(set(ref(db, A('state/s2')), { status: 'working', workDate: TODAY, since: 1, inAt: 1 }));
     await assertSucceeds(update(ref(db), withAudit(db, [{ path: 'state/s2', node: { status: 'working', workDate: TODAY, since: 1, inAt: 1, prevLogId: '-' }, op: 'set_state' }], { email: false })));
   });
 
-  test('R18 uid ที่อยู่ใน admins แต่ล็อกอิน anonymous: อ่าน staffSecret ไม่ได้', async () => {
+  test('R18 uid ที่อยู่ใน admins แต่ล็อกอิน anonymous: อ่าน logs/เขียน staff/branches ไม่ได้', async () => {
     const db = anonAsAdminUid();
-    await assertFails(get(ref(db, A('staffSecret'))));
-    await assertFails(set(ref(db, A('staff/s9')), { nickname: 'x', branchId: 'b1', shiftStart: '08:00', active: true }));
+    await assertFails(set(ref(db, A('staff/s9')), { nickname: 'x', username: 'xxx', branchId: 'b1', shiftStart: '08:00', active: true }));
     await assertFails(set(ref(db, A('branches/b2')), { name: 'x', radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
     await assertFails(get(ref(db, A('logs'))));
+    await assertFails(get(ref(db, A('deviceRequests'))));
   });
 
   test('R19 วันที่ confirmed แล้ว พนักงาน in ไม่ได้', async () => {
     await seed((db) => set(ref(db, A(`days/${TODAY}/s1`)), { confirmed: true, confirmedBy: 'adm', confirmedAt: 1 }));
-    await assertFails(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertFails(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
     await seed((db) => set(ref(db, A(`days/${TODAY}/s1/confirmed`)), false));
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
   });
 
   test('R20 แอดมินแก้/ลบ audit เดิมไม่ได้ (สร้างใหม่ได้)', async () => {
@@ -386,11 +393,11 @@ describe('Security Rules attendance/', () => {
     await assertFails(remove(ref(db, A('audit/a1'))));
     await assertFails(set(ref(db, A('audit/a2')), { path: 'x', by: 'someone-else', at: serverTimestamp() }));
     await assertFails(set(ref(db, A('audit/a3')), { path: 'x', by: 'adm', at: 5 }));
-    await assertFails(set(ref(anon('u1'), A('audit/a4')), entry()));
+    await assertFails(set(ref(staffDb('u1'), A('audit/a4')), entry()));
   });
 
   test('R22 distance ที่ client อ้างต้องไม่เกิน radius x graceFactor ของสาขา (ในเทส = 80 x 1.5 = 120)', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', logOverride: { distance: 121 } }));
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', logOverride: { distance: 5000 } }));
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', logOverride: { accuracy: -1 } }));
@@ -399,20 +406,20 @@ describe('Security Rules attendance/', () => {
 
   test('R23 [ข้อจำกัดที่ทราบ] $d ย้อนหลัง/ล่วงหน้า สำหรับ in: rules แปลง now เป็นวันที่ไม่ได้ จึงผ่าน (บรรเทาด้วยป้ายเตือนใน master)', async () => {
     // เอกสารพฤติกรรมเมื่อ settings/calendarEnforced ปิดอยู่ (ค่าเริ่มต้น) เมื่อเปิดแล้วถูกปฏิเสธ ดู R45
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2020-01-01' }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2020-01-01' }));
     await seed((db) => remove(ref(db, A('state/s1'))));
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2099-12-31' }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2099-12-31' }));
   });
 
   test('R24 in หลัง done ด้วย $d คนละวัน ผ่าน (กะใหม่) แต่ $d เดียวกันไม่ผ่าน', async () => {
     await setState('s1', WORKING({ status: 'done', workDate: '2026-01-05' }));
     const prev = await seedGet('state/s1');
-    await assertFails(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2026-01-05', prev }));
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2026-01-06', prev }));
+    await assertFails(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2026-01-05', prev }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in', d: '2026-01-06', prev }));
   });
 
   test('R25 type ไม่ตรงกับ state.status ถูกปฏิเสธ (ทุกคู่ที่ผิด)', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     const cases = [
       ['off', ['break_start', 'break_end', 'out']],
       ['working', ['break_end', 'in']],
@@ -428,15 +435,15 @@ describe('Security Rules attendance/', () => {
 
   test('R26 เขียน state เป็นบางส่วนไม่ได้', async () => {
     await setState('s1', WORKING());
-    const db = anon('u1');
+    const db = staffDb('u1');
     await assertFails(update(ref(db, A('state/s1')), { status: 'done' }));
     await assertFails(update(ref(db, A('state/s1')), { since: serverTimestamp() }));
     await assertFails(set(ref(db, A('state/s1/status')), 'off'));
     await assertFails(set(ref(db, A('state/s1/inAt')), 1));
   });
 
-  test('R27 anonymous เขียน settings, days, branches, admins ไม่ได้', async () => {
-    const db = anon('u1');
+  test('R27 พนักงานเขียน settings, days, branches, admins, staff ไม่ได้', async () => {
+    const db = staffDb('u1');
     await assertFails(set(ref(db, A('settings/lateGraceMin')), 5));
     await assertFails(set(ref(db, A('days/' + TODAY + '/s1')), { confirmed: true }));
     await assertFails(set(ref(db, A('branches/b1/radius')), 300));
@@ -445,16 +452,16 @@ describe('Security Rules attendance/', () => {
   });
 
   test('R28 corrections: สร้างของตัวเองได้ pending เท่านั้น อ่านของตัวเองผ่าน query ได้', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     const body = (over = {}) => ({ staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'ลืมกด', status: 'pending', createdAt: serverTimestamp(), ...over });
-    await assertSucceeds(set(ref(db, A('corrections/c1')), body()));
-    await assertFails(set(ref(db, A('corrections/c1')), body({ reason: 'แก้' })));          // create-only
+    await assertSucceeds(corrCreate(db, 'c1', body()));
+    await assertFails(corrCreate(db, 'c1', body({ reason: 'แก้' })));          // create-only
     // เฟส 2: เจ้าของลบคำขอ pending ของตัวเองได้ (ดู R41) แต่คนอื่นลบไม่ได้
-    await assertFails(remove(ref(anon('u2'), A('corrections/c1'))));
-    await assertFails(set(ref(db, A('corrections/c2')), body({ status: 'approved' })));
-    await assertFails(set(ref(db, A('corrections/c3')), body({ staffId: 's2' })));        // ของคนอื่น
-    await assertFails(set(ref(db, A('corrections/bad id')), body()));
-    await assertFails(set(ref(db, A('corrections/c4')), body({ createdAt: 123 })));
+    await assertFails(remove(ref(staffDb('u2'), A('corrections/c1'))));
+    await assertFails(corrCreate(db, 'c2', body({ status: 'approved' })));
+    await assertFails(corrCreate(db, 'c3', body({ staffId: 's2' }), { proof: { k: KEYOF.s2 } }));        // ของคนอื่น
+    await assertFails(corrCreate(db, 'bad id', body()));
+    await assertFails(corrCreate(db, 'c4', body({ createdAt: 123 })));
     await assertFails(update(ref(db, A('corrections/c1')), { status: 'approved' }));
     const mine = await assertSucceeds(get(query(ref(db, A('corrections')), orderByChild('staffId'), equalTo('s1'))));
     if (Object.keys(mine.val() || {}).length !== 1) throw new Error('ควรอ่านของตัวเองได้ 1 รายการ');
@@ -463,13 +470,16 @@ describe('Security Rules attendance/', () => {
     await assertSucceeds(update(ref(admin(), A('corrections/c1')), { status: 'approved', decidedBy: 'adm', decidedAt: serverTimestamp() }));
   });
 
-  test('R21 แอดมินสร้าง staff ที่มี pinHash ใน staff/ ไม่ได้', async () => {
+  test('R21 แอดมินสร้าง staff ที่มี pinHash/deviceApproved ไม่ได้ และ staff ต้องมี username/branch/shiftStart ที่ถูกต้อง', async () => {
     const db = admin();
-    await assertFails(set(ref(db, A('staff/s9')), { nickname: 'x', branchId: 'b1', shiftStart: '08:00', active: true, pinHash: HASH_A }));
+    const ok = { nickname: 'x', username: 'xxx', branchId: 'b1', shiftStart: '08:00', active: true };
+    await assertFails(set(ref(db, A('staff/s9')), { ...ok, pinHash: HASH_A }));
     await assertFails(update(ref(db, A('staff/s1')), { pinHash: HASH_A }));
-    await assertFails(set(ref(db, A('staff/s9')), { nickname: 'x', branchId: 'nope', shiftStart: '08:00', active: true }));
-    await assertFails(set(ref(db, A('staff/s9')), { nickname: 'x', branchId: 'b1', shiftStart: '25:00', active: true }));
-    await assertFails(set(ref(db, A('staffSecret/s9')), { pinHash: 'zzzz' }));
+    await assertFails(update(ref(db, A('staff/s1')), { deviceApproved: true }));
+    await assertFails(set(ref(db, A('staff/s9')), { ...ok, branchId: 'nope' }));
+    await assertFails(set(ref(db, A('staff/s9')), { ...ok, shiftStart: '25:00' }));
+    await assertFails(set(ref(db, A('staff/s9')), { nickname: 'x', branchId: 'b1', shiftStart: '08:00', active: true }));   // ไม่มี username
+    await assertSucceeds(set(ref(db, A('staff/s9')), ok));
   });
 
   // ================= เฟส 2 (R29-R48) =================
@@ -646,7 +656,7 @@ describe('Security Rules attendance/', () => {
       { path: `logs/${YESTERDAY}/s1/Y2`, node: { type: 'out', ts: ty + 3600000, branchId: 'b1', source: 'admin' }, op: 'add_log' },
       { path: 'state/s1', node: { status: 'done', workDate: YESTERDAY, since: ty + 3600000, inAt: ty, lastLogId: 'Y2', prevLogId: 'Y1' }, op: 'set_state' },
     ])));
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
     // (ข) s2 ยังไม่มี state
     const tb = Date.now() - 7200000;
     await assertSucceeds(update(ref(db), withAudit(db, [
@@ -654,7 +664,7 @@ describe('Security Rules attendance/', () => {
       { path: 'state/s2', node: { status: 'working', workDate: TODAY, since: tb, inAt: tb, lastLogId: 'B1', prevLogId: '-' }, op: 'set_state' },
     ])));
     const prev = await seedGet('state/s2');
-    await assertSucceeds(send(anon('u2'), { sid: 's2', uid: 'u2', type: 'break_start', prev }));
+    await assertSucceeds(send(staffDb('u2'), { sid: 's2', uid: 'u2', type: 'break_start', prev }));
     // (ค) s1 กำลังทำงานวันนี้ (จาก (ก)) แอดมิน void ทุกรายการ ตั้ง state off
     const s1 = (await get(ref(db, A('state/s1')))).val();
     const logs = (await get(ref(db, A(`logs/${TODAY}/s1`)))).val();
@@ -663,11 +673,11 @@ describe('Security Rules attendance/', () => {
       { path: `logs/${TODAY}/s1/${lid0}`, node: { ...l0, voided: true }, before: { ts: l0.ts }, op: 'void_log' },
       { path: 'state/s1', node: { status: 'off', workDate: TODAY, since: Date.now() - 60000, prevLogId: s1.lastLogId }, op: 'rebuild_state' },
     ])));
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in' }));
   });
 
   test('R40 พนักงานใส่ฟิลด์ของแอดมิน (auditId/prevLogId/editedBy/voided/origTs/note/correctionId/movedFrom) ไม่ได้', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', stateOverride: { auditId: 'a1' } }));
     await assertFails(send(db, { sid: 's1', uid: 'u1', type: 'in', stateOverride: { prevLogId: '-' } }));
     for (const f of [{ auditId: 'a1' }, { editedBy: 'u1' }, { editedAt: serverTimestamp() }, { voided: true }, { origTs: 1 }, { note: 'x' }, { correctionId: 'c1' }, { movedFrom: 'logs/x' }]) {
@@ -677,24 +687,24 @@ describe('Security Rules attendance/', () => {
   });
 
   test('R41 corrections ของพนักงาน: break+endTime, nextDay, ลบคำขอ pending ของตัวเอง, ฟิลด์ของแอดมินใส่เองไม่ได้', async () => {
-    const db = anon('u1');
+    const db = staffDb('u1');
     const body = (over = {}) => ({ staffId: 's1', workDate: TODAY, type: 'out', time: '17:30', reason: 'ลืมกด', status: 'pending', createdAt: serverTimestamp(), ...over });
-    await assertSucceeds(set(ref(db, A('corrections/c1')), body({ type: 'break', time: '12:00', endTime: '13:00' })));
-    await assertFails(set(ref(db, A('corrections/c2')), body({ type: 'break', time: '12:00' })));                      // break ไม่มี endTime
-    await assertFails(set(ref(db, A('corrections/c2')), body({ endTime: '25:00' })));
-    await assertSucceeds(set(ref(db, A('corrections/c3')), body({ time: '02:00', nextDay: true })));
-    await assertFails(set(ref(db, A('corrections/c4')), body({ nextDay: 'yes' })));
-    await assertSucceeds(remove(ref(db, A('corrections/c1'))));                                                          // ลบ pending ของตัวเอง
+    await assertSucceeds(corrCreate(db, 'c1', body({ type: 'break', time: '12:00', endTime: '13:00' })));
+    await assertFails(corrCreate(db, 'c2', body({ type: 'break', time: '12:00' })));                      // break ไม่มี endTime
+    await assertFails(corrCreate(db, 'c2', body({ endTime: '25:00' })));
+    await assertSucceeds(corrCreate(db, 'c3', body({ time: '02:00', nextDay: true })));
+    await assertFails(corrCreate(db, 'c4', body({ nextDay: 'yes' })));
+    await assertSucceeds(corrDelete(db, 'c1', 's1'));                                                          // ลบ pending ของตัวเอง
     await seed(async (adb) => {
       await set(ref(adb, A('corrections/cd')), body({ status: 'approved', createdAt: 1, decidedBy: 'adm', decidedAt: 2 }));
       await set(ref(adb, A('corrections/co')), body({ staffId: 's2', createdAt: 1 }));
     });
-    await assertFails(remove(ref(db, A('corrections/cd'))));                                                             // ตัดสินแล้ว
-    await assertFails(remove(ref(db, A('corrections/co'))));                                                             // ของคนอื่น
-    await assertFails(set(ref(db, A('corrections/c5')), body({ resultNote: 'อนุมัติ' })));
-    await assertFails(set(ref(db, A('corrections/c6')), body({ appliedTs: 1 })));
-    await assertFails(set(ref(db, A('corrections/c7')), body({ decidedBy: 'u1' })));
-    await assertFails(set(ref(db, A('corrections/c8')), body({ appliedLogId: 'L1' })));
+    await assertFails(corrDelete(db, 'cd', 's1', { proof: { k: KEYOF.s1 } }));                                                             // ตัดสินแล้ว
+    await assertFails(corrDelete(db, 'co', 's2', { proof: { k: KEYOF.s1 } }));                                                             // ของคนอื่น
+    await assertFails(corrCreate(db, 'c5', body({ resultNote: 'อนุมัติ' })));
+    await assertFails(corrCreate(db, 'c6', body({ appliedTs: 1 })));
+    await assertFails(corrCreate(db, 'c7', body({ decidedBy: 'u1' })));
+    await assertFails(corrCreate(db, 'c8', body({ appliedLogId: 'L1' })));
     await assertFails(update(ref(db, A('corrections/c3')), { time: '03:00' }));                                          // แก้เองไม่ได้
   });
 
@@ -742,18 +752,18 @@ describe('Security Rules attendance/', () => {
     const P = `logs/${TODAY}/s1/`;
     const snap = await assertSucceeds(get(query(ref(db, A('audit')), orderByChild('path'), startAt(P), endAt(P + ''))));
     if (Object.keys(snap.val() || {}).length !== 2) throw new Error('query audit ตาม path ควรได้ 2 รายการ');
-    await assertFails(get(ref(anon('u1'), A('audit'))));
+    await assertFails(get(ref(staffDb('u1'), A('audit'))));
   });
 
   test('R45 calendar + calendarEnforced: เขียนเฉพาะค่าเที่ยงคืนโดยแอดมิน, เมื่อเปิดบังคับ in ต้องตรงวันจริง', async () => {
     const db = adminEmail();
     await assertSucceeds(set(ref(db, A(`calendar/${TODAY}`)), midnightTH(TODAY)));
     await assertFails(set(ref(db, A(`calendar/${YESTERDAY}`)), midnightTH(YESTERDAY) + 3600000));
-    await assertFails(set(ref(anon('u1'), A(`calendar/${YESTERDAY}`)), midnightTH(YESTERDAY)));
+    await assertFails(set(ref(staffDb('u1'), A(`calendar/${YESTERDAY}`)), midnightTH(YESTERDAY)));
     await assertFails(set(ref(db, A('calendar/not-a-date')), midnightTH(TODAY)));
     await assertSucceeds(set(ref(db, A(`calendar/${YESTERDAY}`)), midnightTH(YESTERDAY)));
     await assertSucceeds(set(ref(db, A('settings/calendarEnforced')), true));
-    const u1 = anon('u1');
+    const u1 = staffDb('u1');
     await assertSucceeds(send(u1, { sid: 's1', uid: 'u1', type: 'in' }));                           // $d = วันนี้
     await seed((adb) => remove(ref(adb, A('state/s1'))));
     await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in', d: '2020-01-01' }));
@@ -761,7 +771,7 @@ describe('Security Rules attendance/', () => {
     // กะเมื่อวานที่ค้างอยู่ break_start ไม่ถูกบังคับ
     await setState('s2', WORKING({ workDate: YESTERDAY }));
     const prev = await seedGet('state/s2');
-    await assertSucceeds(send(anon('u2'), { sid: 's2', uid: 'u2', type: 'break_start', d: YESTERDAY, prev }));
+    await assertSucceeds(send(staffDb('u2'), { sid: 's2', uid: 'u2', type: 'break_start', d: YESTERDAY, prev }));
   });
 
   test('R46 settings ใหม่: reviewDays 7..92, correctionDays 1..62, calendarEnforced boolean, แอดมินเท่านั้น', async () => {
@@ -772,8 +782,8 @@ describe('Security Rules attendance/', () => {
     await assertFails(set(ref(db, A('settings/correctionDays')), 0));
     await assertSucceeds(set(ref(db, A('settings/calendarEnforced')), true));
     await assertFails(set(ref(db, A('settings/calendarEnforced')), 'yes'));
-    await assertFails(set(ref(anon('u1'), A('settings/calendarEnforced')), true));
-    await assertSucceeds(get(ref(anon('u1'), A('settings'))));
+    await assertFails(set(ref(staffDb('u1'), A('settings/calendarEnforced')), true));
+    await assertSucceeds(get(ref(staffDb('u1'), A('settings'))));
   });
 
   test('R47 พนักงานกดครบวงหลังแอดมินเคยเขียน state (auditId/prevLogId ค้างอยู่) ผ่านทุกขั้น', async () => {
@@ -783,7 +793,7 @@ describe('Security Rules attendance/', () => {
       { path: `logs/${TODAY}/s1/B1`, node: { type: 'in', ts: tb, branchId: 'b1', source: 'admin' }, op: 'add_log' },
       { path: 'state/s1', node: { status: 'working', workDate: TODAY, since: tb, inAt: tb, lastLogId: 'B1', prevLogId: '-' }, op: 'set_state' },
     ])));
-    const u = anon('u1');
+    const u = staffDb('u1');
     const age = () => seed((adb) => update(ref(adb, A('state/s1')), { since: Date.now() - 60000 }));
     let prev = (await get(ref(u, A('state/s1')))).val();
     if (!prev.auditId || !prev.prevLogId) throw new Error('state ควรมี auditId/prevLogId ค้างอยู่');
@@ -803,13 +813,13 @@ describe('Security Rules attendance/', () => {
       await set(ref(adb, A('state/s1')), { status: 'working', workDate: TODAY, since: t, inAt: t, lastLogId: 'P1', lastLat: 13.7, lastLng: 100.5, lastBranchId: 'b1' });
       await set(ref(adb, A('corrections/cp')), { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'ลืมกด', status: 'pending', createdAt: t });
     });
-    await assertSucceeds(get(ref(anon('u1'), A('state/s1'))));
-    await assertSucceeds(get(ref(anon('u1'), A(`logs/${TODAY}/s1`))));
-    await assertSucceeds(get(query(ref(anon('u1'), A('corrections')), orderByChild('staffId'), equalTo('s1'))));
-    await assertFails(get(ref(anon('u2'), A('state/s1'))));
+    await assertSucceeds(get(ref(staffDb('u1'), A('state/s1'))));
+    await assertSucceeds(get(ref(staffDb('u1'), A(`logs/${TODAY}/s1`))));
+    await assertSucceeds(get(query(ref(staffDb('u1'), A('corrections')), orderByChild('staffId'), equalTo('s1'))));
+    await assertFails(get(ref(staffDb('u2'), A('state/s1'))));
     await assertSucceeds(get(ref(adminEmail(), A('logs'))));
     const prev = await seedGet('state/s1');
-    await assertSucceeds(send(anon('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev }));
+    await assertSucceeds(send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'break_start', prev }));
   });
 
   // ================= เทสเพิ่มจากรีวิว (R49-R55) =================
@@ -847,7 +857,7 @@ describe('Security Rules attendance/', () => {
     const D2 = '2030-01-01';
     const tryIn = async (cal, shouldPass) => {
       await seed(async (adb) => { await remove(ref(adb, A('state/s1'))); await set(ref(adb, A(`calendar/${D2}`)), cal); });
-      const p = send(anon('u1'), { sid: 's1', uid: 'u1', type: 'in', d: D2 });
+      const p = send(staffDb('u1'), { sid: 's1', uid: 'u1', type: 'in', d: D2 });
       await (shouldPass ? assertSucceeds(p) : assertFails(p));
     };
     const n = Date.now();
@@ -868,12 +878,13 @@ describe('Security Rules attendance/', () => {
     await assertSucceeds(update(ref(db, A('corrections/c4')), dec()));
   });
 
-  test('R53 correction จากเครื่องที่ไม่ได้อนุมัติ/ปิดบัญชี/ยังไม่ผูก ปฏิเสธ', async () => {
+  test('R53 correction จากบัญชีที่ไม่มีกุญแจ/ปิดบัญชี/ไม่มีเจ้าของ/ไม่ส่ง proof ปฏิเสธ', async () => {
     const body = (sid) => ({ staffId: sid, workDate: TODAY, type: 'in', time: '08:00', reason: 'ลืมกด', status: 'pending', createdAt: serverTimestamp() });
-    await assertFails(set(ref(anon('u5'), A('corrections/c5')), body('s5')));   // deviceApproved=false
-    await assertFails(set(ref(anon('u3'), A('corrections/c3')), body('s3')));   // active=false
-    await assertFails(set(ref(anon('u9'), A('corrections/c4')), body('s4')));   // ยังไม่ผูกเครื่อง
-    await assertSucceeds(set(ref(anon('u1'), A('corrections/c1')), body('s1')));
+    await assertFails(corrCreate(staffDb('u5'), 'c5', body('s5')));                // ไม่มี deviceKeys
+    await assertFails(corrCreate(staffDb('u3'), 'c3', body('s3')));                // ปิดบัญชี
+    await assertFails(corrCreate(staffDb('u9'), 'c4', body('s4'), { proof: { k: 'z'.repeat(43) } }));   // staff ยังไม่มีเจ้าของ
+    await assertFails(corrCreate(staffDb('u1'), 'c0', body('s1'), { proof: false }));  // ไม่ส่ง proof
+    await assertSucceeds(corrCreate(staffDb('u1'), 'c1', body('s1')));
   });
 
   test('R54 ย้ายกะ (movedFrom): ถูกต้องผ่าน; ปลอม movedFrom (path อื่น, ค่าไม่ตรง, ต้นทางไม่ void, sid อื่น, source admin) ปฏิเสธ', async () => {
@@ -909,29 +920,29 @@ describe('Security Rules attendance/', () => {
       await set(ref(adb, A('settings/calendarLast')), '2030-12-31');
       for (const n of [-9, -7, -1, 0, 2]) await set(ref(adb, A(`calendar/${addDaysTH(TODAY, n)}`)), mid(n));
     });
-    const db = anon('u1');
+    const db = staffDb('u1');
     const body = (d, over = {}) => ({ staffId: 's1', workDate: d, type: 'in', time: '08:00', reason: 'ลืมกด', status: 'pending', createdAt: serverTimestamp(), ...over });
-    await assertSucceeds(set(ref(db, A('corrections/w0')), body(TODAY)));
-    await assertSucceeds(set(ref(db, A('corrections/w1')), body(addDaysTH(TODAY, -1))));
-    await assertSucceeds(set(ref(db, A('corrections/w7')), body(addDaysTH(TODAY, -7))));          // ครบ 7 วัน
-    await assertFails(set(ref(db, A('corrections/w9')), body(addDaysTH(TODAY, -9))));             // เกินช่วง
-    await assertFails(set(ref(db, A('corrections/wf')), body(addDaysTH(TODAY, 2))));              // อนาคต
-    await assertFails(set(ref(db, A('corrections/wa')), body('2020-01-01')));                     // ไม่มีในปฏิทิน
-    await assertFails(set(ref(db, A('corrections/wb')), body('2099-12-31')));
+    await assertSucceeds(corrCreate(db, 'w0', body(TODAY)));
+    await assertSucceeds(corrCreate(db, 'w1', body(addDaysTH(TODAY, -1))));
+    await assertSucceeds(corrCreate(db, 'w7', body(addDaysTH(TODAY, -7))));          // ครบ 7 วัน
+    await assertFails(corrCreate(db, 'w9', body(addDaysTH(TODAY, -9))));             // เกินช่วง
+    await assertFails(corrCreate(db, 'wf', body(addDaysTH(TODAY, 2))));              // อนาคต
+    await assertFails(corrCreate(db, 'wa', body('2020-01-01')));                     // ไม่มีในปฏิทิน
+    await assertFails(corrCreate(db, 'wb', body('2099-12-31')));
     // correctionDays = 3 -> ย้อนได้ ~3 วัน
     await seed((adb) => set(ref(adb, A('settings/correctionDays')), 3));
-    await assertFails(set(ref(db, A('corrections/w7b')), body(addDaysTH(TODAY, -7))));
-    await assertSucceeds(set(ref(db, A('corrections/w1b')), body(addDaysTH(TODAY, -1))));
+    await assertFails(corrCreate(db, 'w7b', body(addDaysTH(TODAY, -7))));
+    await assertSucceeds(corrCreate(db, 'w1b', body(addDaysTH(TODAY, -1))));
     // ยังไม่เคยสร้างปฏิทิน (ไม่มี calendarLast): ไม่บังคับช่วง (ข้อจำกัดที่ทราบ) แต่ยังตรวจรูปแบบวัน
     await seed((adb) => remove(ref(adb, A('settings/calendarLast'))));
-    await assertSucceeds(set(ref(db, A('corrections/wn')), body('2020-01-01')));
-    await assertFails(set(ref(db, A('corrections/wm')), body('2020-13-45')));
+    await assertSucceeds(corrCreate(db, 'wn', body('2020-01-01')));
+    await assertFails(corrCreate(db, 'wm', body('2020-13-45')));
   });
 
   // ================= เฟส 3 (R56-R60) =================
   test('R56 พนักงานอ่าน logs ได้เฉพาะ logs/{วัน}/{ตัวเอง}: วันว่างได้ null, ของคนอื่น/ทั้งวัน/query ช่วง ปฏิเสธ', async () => {
     await seedLog('s2', TODAY, 'X1', APPLOG({ uid: 'u2' }));
-    const db = anon('u1');
+    const db = staffDb('u1');
     const snap = await assertSucceeds(get(ref(db, A('logs/2020-01-01/s1'))));
     if (snap.val() !== null) throw new Error('วันที่ไม่มีข้อมูลต้องได้ null');
     await assertSucceeds(get(ref(db, A(`logs/${TODAY}/s1`))));
@@ -944,8 +955,8 @@ describe('Security Rules attendance/', () => {
   test('R57 days: พนักงานอ่านไม่ได้; แอดมิน query logs/days แบบช่วง orderByKey ได้', async () => {
     await seedLog('s1', TODAY, 'X1', APPLOG());
     await seed((adb) => set(ref(adb, A(`days/${TODAY}/s1`)), { confirmed: true, confirmedBy: 'adm', confirmedAt: 1, auditId: 'seedaud' }));
-    await assertFails(get(ref(anon('u1'), A(`days/${TODAY}/s1`))));
-    await assertFails(get(ref(anon('u1'), A(`days/${TODAY}`))));
+    await assertFails(get(ref(staffDb('u1'), A(`days/${TODAY}/s1`))));
+    await assertFails(get(ref(staffDb('u1'), A(`days/${TODAY}`))));
     const db = adminEmail();
     const l = await assertSucceeds(get(query(ref(db, A('logs')), orderByKey(), startAt(YESTERDAY), endAt(TODAY))));
     const dd = await assertSucceeds(get(query(ref(db, A('days')), orderByKey(), startAt(YESTERDAY), endAt(TODAY))));
@@ -954,7 +965,7 @@ describe('Security Rules attendance/', () => {
 
   test('R58 staff.shiftEnd: แอดมินตั้งได้ HH:MM เท่านั้น (ค่าผิดรูปแบบ/ชนิดผิดปฏิเสธ) และเป็น optional', async () => {
     const db = adminEmail();
-    const base = { nickname: 'ใหม่', branchId: 'b1', shiftStart: '07:00', active: true };
+    const base = { nickname: 'ใหม่', username: 'newbie', branchId: 'b1', shiftStart: '07:00', active: true };
     await assertSucceeds(set(ref(db, A('staff/n1')), { ...base, shiftEnd: '18:00' }));
     await assertSucceeds(set(ref(db, A('staff/n2')), { ...base, shiftEnd: '00:30' }));
     await assertSucceeds(set(ref(db, A('staff/n3')), base));                                   // ไม่มี shiftEnd (ข้อมูลเดิม)
@@ -966,11 +977,12 @@ describe('Security Rules attendance/', () => {
   });
 
   test('R59 shiftEnd: พนักงาน/anonymous/แอดมินที่เป็น anonymous แก้ไม่ได้', async () => {
-    await assertFails(set(ref(anon('u1'), A('staff/s1/shiftEnd')), '10:00'));
-    await assertFails(update(ref(anon('u1'), A('staff/s1')), { shiftEnd: '10:00' }));
+    await assertFails(set(ref(staffDb('u1'), A('staff/s1/shiftEnd')), '10:00'));
+    await assertFails(update(ref(staffDb('u1'), A('staff/s1')), { shiftEnd: '10:00' }));
     await assertFails(set(ref(anonAsAdminUid(), A('staff/s1/shiftEnd')), '10:00'));
     await assertFails(set(ref(guest(), A('staff/s1/shiftEnd')), '10:00'));
-    await assertSucceeds(get(ref(anon('u9'), A('staff/s1'))));       // ยังอ่านได้ (แอปพนักงานใช้ shiftStart/shiftEnd)
+    await assertSucceeds(get(ref(staffDb('u1'), A('staff/s1'))));     // อ่านของตัวเองได้ (แอปใช้ shiftStart/shiftEnd)
+    await assertFails(get(ref(stranger('x1'), A('staff/s1'))));       // คนนอกอ่านไม่ได้
   });
 
   test('R60 ฟิลด์แปลกใน staff ยังถูกปฏิเสธ (เพิ่ม shiftEnd ไม่เปิด $other)', async () => {
@@ -978,6 +990,290 @@ describe('Security Rules attendance/', () => {
     await assertFails(update(ref(db, A('staff/s1')), { shiftEnds: '18:00' }));
     await assertFails(update(ref(db, A('staff/s1')), { shiftEnd: '18:00', extra: 1 }));
     await assertSucceeds(update(ref(db, A('staff/s1')), { shiftEnd: '18:00', shiftStart: '07:00' }));
+  });
+
+  // ================= Auth v2 (R61-R76) docs/plan-auth-v2.md ข้อ 10.3 =================
+  test('R61 ADMIN macro: แอดมิน password + อีเมลปกติผ่าน; uid ใน admins แต่ใช้อีเมลโดเมนพนักงาน / anonymous / provider อื่น ไม่ผ่าน', async () => {
+    await assertSucceeds(get(ref(adminEmail(), A('logs'))));
+    await assertSucceeds(get(ref(adminEmail(), A('staff'))));
+    const staffMail = env.authenticatedContext('adm', { email: 'nong_a' + DOM, firebase: { sign_in_provider: 'password' } }).database();
+    await assertFails(get(ref(staffMail, A('logs'))));
+    await assertFails(get(ref(staffMail, A('staff'))));
+    await assertFails(get(ref(staffMail, A('deviceRequests'))));
+    await assertFails(set(ref(staffMail, A('branches/b9')), { name: 'x', radius: 80, maxAccuracy: 60, graceFactor: 1.5, breakLimitMin: 60 }));
+    await assertFails(get(ref(anonAsAdminUid(), A('logs'))));
+    const google = env.authenticatedContext('adm', { email: 'boss@gmail.com', firebase: { sign_in_provider: 'google.com' } }).database();
+    await assertFails(get(ref(google, A('logs'))));
+    await assertFails(set(ref(staffMail, A('admins/u9')), true));        // ยกระดับตัวเองไม่ได้
+  });
+
+  test('R62 สร้างคำขอสมัคร (register): ถูกต้องผ่าน; username/ชื่อเล่น/key/did/status/requestedAt/ฟิลด์แปลก/uid อื่น/คนนอก ปฏิเสธ', async () => {
+    const db = staffDb('u9');
+    const put = (req, d = db, uid = 'u9') => set(ref(d, A('deviceRequests/' + uid)), req);
+    const omit = (o, ...ks) => { const r = JSON.parse(JSON.stringify(o)); for (const k of ks) delete r[k]; return r; };
+    const noNick = regReq(); delete noNick.info.nickname;
+    const bads = [
+      regReq({}, { username: 'someone' }), regReq({}, { username: 'Newbie' }), regReq({}, { username: 'ab' }), regReq({}, { username: 'new.bie' }),
+      regReq({}, { nickname: 'ก'.repeat(21) }), noNick, regReq({ key: 'short' }), omit(regReq(), 'key'), regReq({}, { did: 'short' }),
+      regReq({}, { status: 'rejected' }), regReq({}, { status: 'approved' }), regReq({}, { requestedAt: 123 }),
+      regReq({}, { hacker: 1 }), regReq({ hacker: 1 }), regReq({}, { kind: 'admin' }), regReq({}, { relink: 'yes' }),
+    ];
+    for (const b of bads) await assertFails(put(b));
+    await assertFails(put(regReq(), db, 'other'));                         // path ของ uid อื่น
+    await assertFails(put(regReq({}, { username: 'gmailer' }), stranger('gm1'), 'gm1'));          // อีเมลไม่ใช่โดเมนพนักงาน
+    await assertFails(put(regReq(), guest()));
+    await assertFails(put(regReq(), anonDb('u9')));
+    await assertSucceeds(put(regReq({}, { relink: true, oldUsername: 'nong_a' })));
+    const got = (await get(ref(db, A('deviceRequests/u9/info')))).val();
+    if (got.username !== 'newbie' || typeof got.requestedAt !== 'number') throw new Error('คำขอไม่ถูกเก็บ');
+  });
+
+  test('R63 อ่านคำขอ: ตัวเองอ่าน info ได้ แต่ทั้งก้อนและ key ไม่ได้; uid อื่นอ่าน info ไม่ได้; แอดมินอ่านทั้งหมด', async () => {
+    const me = staffDb('u9');
+    await set(ref(me, A('deviceRequests/u9')), regReq());
+    await assertSucceeds(get(ref(me, A('deviceRequests/u9/info'))));
+    await assertFails(get(ref(me, A('deviceRequests/u9'))));
+    await assertFails(get(ref(me, A('deviceRequests/u9/key'))));
+    await assertFails(get(ref(staffDb('u1'), A('deviceRequests/u9/info'))));
+    await assertFails(get(ref(me, A('deviceRequests'))));
+    const all = await assertSucceeds(get(ref(adminEmail(), A('deviceRequests'))));
+    if (all.val().u9.key !== KEY9) throw new Error('แอดมินต้องเห็น key เพื่ออนุมัติ');
+  });
+
+  test('R64 1 คำขอต่อ uid: ทับ pending/แก้ status เองไม่ได้ ลบของตัวเองได้ สร้างใหม่ได้ แอดมินตั้ง rejected แล้วสร้างทับได้', async () => {
+    const me = staffDb('u9'), adm = adminEmail();
+    const path = A('deviceRequests/u9');
+    await assertSucceeds(set(ref(me, path), regReq()));
+    await assertFails(set(ref(me, path), regReq({}, { nickname: 'ใหม่2' })));
+    await assertFails(update(ref(me, A('deviceRequests/u9/info')), { status: 'approved' }));
+    await assertFails(update(ref(me, A('deviceRequests/u9/info')), { status: 'rejected' }));
+    await assertSucceeds(remove(ref(me, path)));
+    await assertSucceeds(set(ref(me, path), regReq()));
+    await assertSucceeds(update(ref(adm, A('deviceRequests/u9/info')), { status: 'rejected' }));
+    await assertSucceeds(set(ref(me, path), regReq()));                    // ทับหลัง rejected
+    await assertSucceeds(remove(ref(adm, path)));
+    await assertSucceeds(set(ref(me, path), regReq()));
+  });
+
+  test('R65 register/device: register เมื่อมีบัญชีแล้วไม่ได้; device ของบัญชีที่เปิดอยู่ผ่าน; ปิดบัญชี/ยังไม่มีบัญชี ปฏิเสธ; ปิดรับสมัครกัน register แต่ไม่กัน device', async () => {
+    const devReq = (did = 'did_dev_0000000000000') => ({ info: { kind: 'device', did, status: 'pending', requestedAt: serverTimestamp(), userAgent: 'UA', standalone: false }, key: 'q'.repeat(43) });
+    await assertFails(set(ref(staffDb('u1'), A('deviceRequests/u1')), regReq({}, { username: 'nong_a' })));
+    await assertSucceeds(set(ref(staffDb('u1'), A('deviceRequests/u1')), devReq()));
+    await assertFails(set(ref(staffDb('u3'), A('deviceRequests/u3')), devReq()));                 // ปิดบัญชี
+    await assertFails(set(ref(staffDb('u9'), A('deviceRequests/u9')), devReq()));                 // ยังไม่มีบัญชี
+    await assertFails(set(ref(staffDb('u5'), A('deviceRequests/u5')), regReq({}, { username: 'nong_e' })));   // u5 มีบัญชีแล้ว
+    await seed((adb) => set(ref(adb, A('settings/registrationOpen')), false));
+    await assertFails(set(ref(staffDb('u9'), A('deviceRequests/u9')), regReq()));
+    await assertSucceeds(set(ref(staffDb('u2'), A('deviceRequests/u2')), devReq('did_dev_1111111111111')));
+    await seed((adb) => set(ref(adb, A('settings/registrationOpen')), true));
+    await assertSucceeds(set(ref(staffDb('u9'), A('deviceRequests/u9')), regReq()));
+  });
+
+  test('R66 แอดมินอนุมัติคำขอสมัคร (update เดียว): ครบผ่าน; ขาด accounts/ไม่สอดคล้อง/deviceId ไม่ตรง/ไม่มี username/ค่ากุญแจผิด ปฏิเสธ', async () => {
+    const adm = adminEmail();
+    await set(ref(staffDb('u9'), A('deviceRequests/u9')), regReq());
+    const full = (o = {}) => approveReg(o);
+    const without = (k) => { const u = approveReg({}); delete u[A(k)]; return u; };
+    await assertFails(update(ref(adm), without('accounts/u9')));
+    await assertFails(update(ref(adm), full({ accountsSid: 's8' })));                          // accounts ชี้ sid ที่ uid ไม่ตรง
+    await assertFails(update(ref(adm), full({ staff: { uid: 'u8' } })));                        // staff.uid ไม่ตรง accounts
+    await assertFails(update(ref(adm), full({ keys: { did: 'did_other_00000000000' } })));      // deviceKeys.did ≠ staff.deviceId
+    await assertFails(update(ref(adm), without('deviceKeys/s9')));                              // deviceId โดยไม่มี deviceKeys
+    await assertFails(update(ref(adm), full({ staff: { username: undefined } })));
+    await assertFails(update(ref(adm), full({ staff: { username: 'Bad Name' } })));
+    await assertFails(update(ref(adm), full({ keys: { at: 5 } })));
+    await assertFails(update(ref(adm), full({ keys: { k: 'short' } })));
+    await assertFails(update(ref(adm), full({ staff: { hacker: 1 } })));
+    await assertSucceeds(update(ref(adm), full()));
+    const u9 = staffDb('u9');
+    await assertSucceeds(send(u9, { sid: 's9', uid: 'u9', type: 'in', proof: { k: KEY9 } }));
+  });
+
+  test('R67 ผู้สมัครอนุมัติตัวเองไม่ได้ และอ่าน accounts/deviceKeys/devproof ของคนอื่นไม่ได้ (แอดมินก็อ่านกุญแจไม่ได้)', async () => {
+    const me = staffDb('u9');
+    await set(ref(me, A('deviceRequests/u9')), regReq());
+    await assertFails(set(ref(me, A('accounts/u9')), 's4'));
+    await assertFails(set(ref(me, A('deviceKeys/s4')), { k: KEY9, did: DID9, at: serverTimestamp() }));
+    await assertFails(set(ref(me, A('staff/s4')), { nickname: 'x', username: 'newbie', branchId: 'b1', shiftStart: '07:00', active: true, uid: 'u9' }));
+    await assertFails(update(ref(me), approveReg({})));
+    const u1 = staffDb('u1');
+    await assertSucceeds(get(ref(u1, A('accounts/u1'))));
+    await assertFails(get(ref(u1, A('accounts/u2'))));
+    await assertFails(get(ref(u1, A('accounts'))));
+    for (const p of ['deviceKeys/s1', 'devproof/s1', 'deviceKeys', 'devproof']) {
+      await assertFails(get(ref(u1, A(p))));
+      await assertFails(get(ref(adminEmail(), A(p))));
+    }
+  });
+
+  test('R68 device proof: ต้องส่ง devproof ที่ k ถูกและ at === now มาใน request เดียวกัน; proof เก่า/ผิด sid/ไม่มี k ใช้ไม่ได้', async () => {
+    const u1 = staffDb('u1'), u2 = staffDb('u2');
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in', proof: false }));
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in', proof: { k: 'x'.repeat(43) } }));
+    // devproof เก่าค้างใน DB (k ถูก แต่ at ย้อนหลัง) แต่ไม่ส่ง proof ใหม่
+    await seed((adb) => set(ref(adb, A('devproof/s1')), { [KEYOF.s1]: Date.now() - 60000 }));
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in', proof: false }));
+    // proof เก่าค้างใน DB ใช้กับคำขอแก้เวลา (สร้าง/ลบ) ไม่ได้
+    await seed((adb) => set(ref(adb, A('corrections/cstale')), { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'x', status: 'pending', createdAt: 1 }));
+    await assertFails(corrCreate(u1, 'cn', { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'x', status: 'pending', createdAt: serverTimestamp() }, { proof: false }));
+    await assertFails(corrDelete(u1, 'cstale', 's1', { proof: false }));
+    await assertSucceeds(corrDelete(u1, 'cstale', 's1'));
+    // proof ของ sid อื่น
+    const u = build(u1, { sid: 's1', uid: 'u1', type: 'in', proof: false }).updates;
+    u[A(`devproof/s2/${KEYOF.s2}`)] = serverTimestamp();
+    await assertFails(update(ref(u1), u));
+    // เขียน devproof เดี่ยว (k ถูก) ผ่าน แต่ at/ฟิลด์แปลกไม่ผ่าน
+    await assertSucceeds(set(ref(u1, A(`devproof/s1/${KEYOF.s1}`)), serverTimestamp()));
+    await assertFails(set(ref(u1, A(`devproof/s1/${KEYOF.s1}`)), 123));
+    await assertFails(set(ref(u1, A('devproof/s1/hacker')), serverTimestamp()));
+    await assertFails(set(ref(u2, A(`devproof/s1/${KEYOF.s1}`)), serverTimestamp()));            // ไม่ใช่เจ้าของ
+    // proof ต้องใหม่ทุกครั้ง: ผ่านแล้วใช้ซ้ำไม่ได้
+    await assertSucceeds(send(u1, { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'break_start', prev: await seedGet('state/s1'), proof: false }));
+    // deviceKeys หาย (null === null) -> proof ใช้ไม่ได้
+    await seed(async (adb) => { await remove(ref(adb, A('deviceKeys/s2'))); });
+    await assertFails(send(u2, { sid: 's2', uid: 'u2', type: 'in' }));
+    await assertFails(set(ref(u2, A(`devproof/s2/${KEYOF.s2}`)), serverTimestamp()));
+  });
+
+  test('R77 devproof bypass: รู้แค่รหัสผ่าน (ไม่รู้กุญแจ) ใช้ proof เก่า/เดาเส้นทาง/รูปแบบ object เดิมไม่ได้; กุญแจที่หมุนแล้วใช้ซ้ำไม่ได้; แอดมินล้างได้', async () => {
+    const u1 = staffDb('u1'), adm = adminEmail();
+    // proof เก่าที่ถูกต้องค้างอยู่ (แบบใหม่ และแบบ object เดิม)
+    await seed((adb) => set(ref(adb, A('devproof/s1')), { [KEYOF.s1]: Date.now() - 60000, k: KEYOF.s1, at: Date.now() - 60000 }));
+    // (a) เขียนเฉพาะ at / ใบเดียวโดยไม่รู้ k
+    await assertFails(set(ref(u1, A('devproof/s1/at')), serverTimestamp()));
+    await assertFails(set(ref(u1, A('devproof/s1/k')), serverTimestamp()));
+    const ua = build(u1, { sid: 's1', uid: 'u1', type: 'in', proof: false }).updates;
+    ua[A('devproof/s1/at')] = serverTimestamp();
+    await assertFails(update(ref(u1), ua));
+    // (b) log+state พร้อมเส้นทางเดา/เก่า (กุญแจผิด 43 ตัว)
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in', proof: { k: 'g'.repeat(43) } }));
+    // (c) รูปแบบ object เดิม {k, at}
+    const u = build(u1, { sid: 's1', uid: 'u1', type: 'in', proof: false }).updates;
+    u[A('devproof/s1')] = { k: KEYOF.s1, at: serverTimestamp() };
+    await assertFails(update(ref(u1), u));
+    // กุญแจถูก ผ่าน
+    await assertSucceeds(send(u1, { sid: 's1', uid: 'u1', type: 'in' }));
+    // หมุนกุญแจ (อนุมัติเครื่องใหม่): leaf ของกุญแจเก่าใช้ไม่ได้ และเขียนใหม่ด้วยกุญแจเก่าไม่ได้
+    const oldK = KEYOF.s1, newK = 'N'.repeat(43), newDid = 'did_rotated_00000000';
+    await assertSucceeds(update(ref(adm), { [A('deviceKeys/s1')]: { k: newK, did: newDid, at: serverTimestamp() }, [A('staff/s1/deviceId')]: newDid, [A('devproof/s1')]: null }));
+    await assertFails(corrCreate(u1, 'cOld', { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'x', status: 'pending', createdAt: serverTimestamp() }, { proof: { k: oldK } }));
+    await assertFails(set(ref(u1, A(`devproof/s1/${oldK}`)), serverTimestamp()));
+    await assertSucceeds(corrCreate(u1, 'cNew', { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'x', status: 'pending', createdAt: serverTimestamp() }, { proof: { k: newK } }));
+    // ผู้ไม่ใช่แอดมินลบ devproof ไม่ได้; พนักงานอ่านไม่ได้
+    await assertFails(remove(ref(u1, A('devproof/s1'))));
+    await assertFails(get(ref(u1, A('devproof/s1'))));
+  });
+
+  test('R69 เพื่อนที่รู้รหัสผ่านแต่ไม่มีกุญแจ: อ่านได้ (ยอมรับ) แต่ลงเวลา/สร้าง-ลบคำขอแก้เวลาไม่ได้ ส่งคำขอใช้เครื่องได้ครั้งเดียวต่อ pending', async () => {
+    await seedShift();
+    await seed((adb) => set(ref(adb, A('corrections/cp1')), { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'x', status: 'pending', createdAt: 1 }));
+    const friend = staffDb('u1');
+    await assertSucceeds(get(ref(friend, A('state/s1'))));
+    await assertSucceeds(get(ref(friend, A(`logs/${TODAY}/s1`))));
+    await assertSucceeds(get(query(ref(friend, A('corrections')), orderByChild('staffId'), equalTo('s1'))));
+    for (const type of ['break_start', 'out']) await assertFails(send(friend, { sid: 's1', uid: 'u1', type, prev: await seedGet('state/s1'), proof: false }));
+    await assertFails(corrCreate(friend, 'cn1', { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'x', status: 'pending', createdAt: serverTimestamp() }, { proof: false }));
+    await assertFails(corrDelete(friend, 'cp1', 's1', { proof: false }));
+    const devReq = { info: { kind: 'device', did: 'did_friend_00000000', status: 'pending', requestedAt: serverTimestamp() }, key: 'f'.repeat(43) };
+    await assertSucceeds(set(ref(friend, A('deviceRequests/u1')), devReq));
+    await assertFails(set(ref(friend, A('deviceRequests/u1')), devReq));
+  });
+
+  test('R70 อนุมัติเครื่องใหม่ (หมุนกุญแจ): กุญแจเก่ากดไม่ได้ กุญแจใหม่กดได้', async () => {
+    const adm = adminEmail(), u1 = staffDb('u1');
+    const NEWK = 'n'.repeat(43), NEWD = 'did_new_0000000000000';
+    await assertSucceeds(update(ref(adm), { [A('deviceKeys/s1')]: { k: NEWK, did: NEWD, at: serverTimestamp() }, [A('staff/s1/deviceId')]: NEWD, [A('staff/s1/deviceAt')]: serverTimestamp() }));
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in' }));                          // กุญแจเก่า
+    await assertSucceeds(send(u1, { sid: 's1', uid: 'u1', type: 'in', proof: { k: NEWK } }));
+    // หมุนกุญแจโดยไม่เปลี่ยน staff.deviceId ไม่ได้ (did ไม่ตรง)
+    await assertFails(update(ref(adm), { [A('deviceKeys/s1')]: { k: 'm'.repeat(43), did: 'did_other_00000000000', at: serverTimestamp() } }));
+  });
+
+  test('R71 relink (ลืมรหัส): ย้าย s1 จาก u1 ไป u7 แล้ว u1 อ่าน/เขียนไม่ได้ u7 ใช้กุญแจเดิมได้; log เก่าแอดมินยังแก้ ts พร้อม audit แต่เปลี่ยน uid ไม่ได้', async () => {
+    const adm = adminEmail();
+    const old = APPLOG({ uid: 'u1' }); await seedLog('s1', TODAY, 'L1', old);
+    await seed((adb) => set(ref(adb, A('state/s1')), { status: 'working', workDate: TODAY, since: Date.now() - 120000, inAt: old.ts, lastLogId: 'L1' }));
+    await assertSucceeds(update(ref(adm), { [A('staff/s1/uid')]: 'u7', [A('staff/s1/username')]: 'nong_a2', [A('accounts/u1')]: null, [A('accounts/u7')]: 's1' }));
+    const u1 = staffDb('u1'), u7 = staffDb('u7');
+    await assertFails(get(ref(u1, A('state/s1'))));
+    await assertFails(get(ref(u1, A(`logs/${TODAY}/s1`))));
+    await assertFails(get(query(ref(u1, A('corrections')), orderByChild('staffId'), equalTo('s1'))));
+    await assertFails(get(ref(u1, A('staff/s1'))));
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'break_start', prev: await seedGet('state/s1') }));
+    await assertSucceeds(get(ref(u7, A('state/s1'))));
+    await assertSucceeds(get(ref(u7, A('accounts/u7'))));
+    await assertSucceeds(send(u7, { sid: 's1', uid: 'u7', type: 'break_start', prev: await seedGet('state/s1') }));
+    // log เก่า (uid u1)
+    const ts2 = old.ts - 60000;
+    await assertSucceeds(update(ref(adm), editLog(adm, { old, changes: { ts: ts2, origTs: old.ts } })));
+    await assertFails(update(ref(adm), editLog(adm, { old: { ...old, ts: ts2, origTs: old.ts }, changes: { uid: 'u7' } })));
+    // accounts ต้องสอดคล้อง staff.uid
+    await assertFails(update(ref(adm), { [A('accounts/u8')]: 's1' }));
+  });
+
+  test('R72 ยกเลิกผูกเครื่อง: ลงเวลา/แก้เวลาไม่ได้แต่ขอเครื่องได้; ปิดบัญชี: ลงเวลา/devproof/คำขอเครื่องไม่ได้; เปิดกลับแล้วกดได้', async () => {
+    const adm = adminEmail(), u1 = staffDb('u1');
+    await assertSucceeds(update(ref(adm), { [A('deviceKeys/s1')]: null, [A('staff/s1/deviceId')]: null, [A('staff/s1/deviceAt')]: null }));
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertFails(corrCreate(u1, 'c1', { staffId: 's1', workDate: TODAY, type: 'in', time: '08:00', reason: 'x', status: 'pending', createdAt: serverTimestamp() }));
+    const devReq = { info: { kind: 'device', did: 'did_again_0000000000', status: 'pending', requestedAt: serverTimestamp() }, key: 'r'.repeat(43) };
+    await assertSucceeds(set(ref(u1, A('deviceRequests/u1')), devReq));
+    await assertSucceeds(remove(ref(u1, A('deviceRequests/u1'))));
+    // คืนกุญแจแล้วปิดบัญชี
+    await assertSucceeds(update(ref(adm), { [A('deviceKeys/s1')]: { k: KEYOF.s1, did: DID.s1, at: serverTimestamp() }, [A('staff/s1/deviceId')]: DID.s1 }));
+    await assertSucceeds(update(ref(adm, A('staff/s1')), { active: false }));
+    await assertFails(send(u1, { sid: 's1', uid: 'u1', type: 'in' }));
+    await assertFails(set(ref(u1, A(`devproof/s1/${KEYOF.s1}`)), serverTimestamp()));
+    await assertFails(set(ref(u1, A('deviceRequests/u1')), devReq));
+    await assertSucceeds(update(ref(adm, A('staff/s1')), { active: true }));
+    await assertSucceeds(send(u1, { sid: 's1', uid: 'u1', type: 'in' }));
+  });
+
+  test('R73 branches/settings/staff อ่านได้เฉพาะสมาชิก: คนนอก/ผู้สมัครที่ยังไม่อนุมัติอ่านไม่ได้ อนุมัติแล้วอ่านได้', async () => {
+    for (const db of [stranger('x1'), staffDb('u9'), guest()]) {
+      await assertFails(get(ref(db, A('branches'))));
+      await assertFails(get(ref(db, A('settings'))));
+      await assertFails(get(ref(db, A('staff'))));
+      await assertFails(get(ref(db, A('staff/s1'))));
+    }
+    const u1 = staffDb('u1');
+    await assertSucceeds(get(ref(u1, A('branches'))));
+    await assertSucceeds(get(ref(u1, A('settings'))));
+    await assertSucceeds(get(ref(u1, A('staff/s1'))));
+    await assertFails(get(ref(u1, A('staff/s2'))));
+    await assertFails(get(ref(u1, A('staff'))));
+    await set(ref(staffDb('u9'), A('deviceRequests/u9')), regReq());
+    await assertSucceeds(update(ref(adminEmail()), approveReg({})));
+    await assertSucceeds(get(ref(staffDb('u9'), A('branches'))));
+  });
+
+  test('R74 staffSecret ถูกลบ: อ่าน/เขียนไม่ได้ และ staff เขียน deviceApproved/deviceApprovedAt/pinHash ไม่ได้', async () => {
+    const adm = adminEmail();
+    await assertFails(get(ref(adm, A('staffSecret/s1'))));
+    await assertFails(set(ref(adm, A('staffSecret/s1')), { pinHash: HASH_A }));
+    await assertFails(set(ref(staffDb('u1'), A('staffSecret/s1')), { pinHash: HASH_A }));
+    for (const f of [{ deviceApproved: true }, { deviceApprovedAt: 1 }, { pinHash: HASH_A }]) await assertFails(update(ref(adm, A('staff/s1')), f));
+  });
+
+  test('R75 settings/registrationOpen: แอดมินตั้ง true/false ได้, ค่าอื่นไม่ได้, พนักงานตั้งไม่ได้', async () => {
+    const adm = adminEmail();
+    await assertSucceeds(set(ref(adm, A('settings/registrationOpen')), true));
+    await assertSucceeds(set(ref(adm, A('settings/registrationOpen')), false));
+    await assertFails(set(ref(adm, A('settings/registrationOpen')), 'no'));
+    await assertFails(set(ref(adm, A('settings/registrationOpen')), 0));
+    await assertFails(set(ref(staffDb('u1'), A('settings/registrationOpen')), true));
+    await assertFails(set(ref(staffDb('u9'), A('settings/registrationOpen')), true));
+  });
+
+  test('R76 เจ้าของสร้างบัญชีให้: staff+accounts ผ่าน; ยังลงเวลาไม่ได้ (ไม่มีกุญแจ); ขอเครื่อง > อนุมัติ > ลงเวลาได้', async () => {
+    const adm = adminEmail(), dao = staffDb('u10');
+    await assertSucceeds(update(ref(adm), { [A('staff/s10')]: { nickname: 'ดาว', username: 'dao', branchId: 'b1', shiftStart: '07:00', shiftEnd: '18:00', active: true, uid: 'u10', createdAt: serverTimestamp() }, [A('accounts/u10')]: 's10' }));
+    await assertFails(send(dao, { sid: 's10', uid: 'u10', type: 'in', proof: { k: 'd'.repeat(43) } }));
+    const did = 'did_dao_000000000000', key = 'd'.repeat(43);
+    await assertSucceeds(set(ref(dao, A('deviceRequests/u10')), { info: { kind: 'device', did, status: 'pending', requestedAt: serverTimestamp() }, key }));
+    await assertSucceeds(update(ref(adm), { [A('deviceKeys/s10')]: { k: key, did, at: serverTimestamp() }, [A('staff/s10/deviceId')]: did, [A('staff/s10/deviceAt')]: serverTimestamp(), [A('deviceRequests/u10')]: null }));
+    await assertSucceeds(send(dao, { sid: 's10', uid: 'u10', type: 'in', proof: { k: key } }));
   });
 });
 

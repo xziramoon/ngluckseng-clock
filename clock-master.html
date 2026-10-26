@@ -135,7 +135,7 @@ tr.locked td{background:#f3f4f6;color:#6b7280}
 // โหมดเดโม (?demo=1): ใช้ฐานข้อมูลจำลองในเครื่องแทน Firebase ดู demo.html ถ้าไม่มี ?demo=1 โค้ดเดโมไม่ถูกโหลดและใช้ Firebase SDK ตามเดิม
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 const FBM = DEMO ? await import('./demo/firebase-demo.mjs') : null;
-const [{ initializeApp }, { getAuth, setPersistence, browserSessionPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator }, { getDatabase, ref, onValue, get, update, set, remove, push, serverTimestamp, connectDatabaseEmulator, query, orderByKey, orderByChild, startAt, endAt, limitToLast, equalTo }] = FBM ? [FBM, FBM, FBM] : await Promise.all([
+const [{ initializeApp }, { getAuth, setPersistence, browserSessionPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator, initializeAuth, inMemoryPersistence, createUserWithEmailAndPassword }, { getDatabase, ref, onValue, get, update, set, remove, push, serverTimestamp, connectDatabaseEmulator, query, orderByKey, orderByChild, startAt, endAt, limitToLast, equalTo }] = FBM ? [FBM, FBM, FBM] : await Promise.all([
   import('https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js'),
   import('https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js'),
   import('https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js')
@@ -153,6 +153,13 @@ const FIREBASE_CONFIG = {
 const EMU = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).get('emu') === '1';
 const CONFIG_MISSING = !EMU && !DEMO && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
 const IDLE_MS = 30 * 60 * 1000;
+// ค่าคงที่ของระบบบัญชีพนักงาน (ต้องตรงกันทุกตัวอักษรกับ clock.html และ database.rules.json) ดู docs/plan-auth-v2.md ข้อ 2.1
+const STAFF_EMAIL_DOMAIN = '@staff.ngluckseng.invalid';
+const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
+const PW_MIN = 6;
+const normUser = (s) => String(s || '').trim().toLowerCase();
+const staffEmail = (u) => normUser(u) + STAFF_EMAIL_DOMAIN;
+const EMU_CFG = { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' };
 
 const $ = (s, r = document) => r.querySelector(s);
 /** สร้าง element ด้วย textContent เท่านั้น (ห้ามใช้ innerHTML กับข้อมูลจาก DB) */
@@ -434,7 +441,7 @@ if (CONFIG_MISSING) {
 
 // ใช้ชื่อ app 'master' แยกจาก clock.html เพื่อไม่ให้แชร์ auth/ตัวตนเครื่องพนักงานเมื่อเปิดบน origin เดียวกัน
 if (DEMO) FBM.mountBanner('master');
-const app = initializeApp(DEMO ? { demo: true } : EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG, 'master');
+const app = initializeApp(DEMO ? { demo: true } : EMU ? EMU_CFG : FIREBASE_CONFIG, 'master');
 const auth = getAuth(app);
 const db = getDatabase(app);
 if (EMU) { connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true }); connectDatabaseEmulator(db, '127.0.0.1', 9000); }
@@ -449,11 +456,6 @@ const fmtTime = (ms) => fmtTimeF.format(ms);
 const bangkokDate = (ms) => bkkDateF.format(ms);
 function fmtMin(totalMin) { totalMin = Math.max(0, Math.round(totalMin)); const hh = Math.floor(totalMin / 60), mm = totalMin % 60; return hh ? `${hh} ชม. ${String(mm).padStart(2, '0')} น.` : `${mm} นาที`; }
 function fmtClock(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
-async function sha256Hex(text) {
-  if (DEMO && !(window.crypto && crypto.subtle)) return FBM.sha256Hex(text);   // เดโมบนหน้า http
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
 const A = (p) => ref(db, 'attendance/' + p);
 
 /* ====== modal ====== */
@@ -525,6 +527,7 @@ $('#loginForm').addEventListener('submit', async (ev) => {
 onAuthStateChanged(auth, async (user) => {
   if (!user) { teardown(); showLogin(sessionStorage.getItem('idleMsg') || ''); sessionStorage.removeItem('idleMsg'); return; }
   if (user.isAnonymous) { showLogin(); return; }   // ไม่ signOut ผู้ใช้ anonymous แค่แสดงฟอร์มล็อกอิน
+  if (String(user.email || '').toLowerCase().endsWith(STAFF_EMAIL_DOMAIN)) { await signOut(auth); showLogin('บัญชีนี้ไม่มีสิทธิ์เจ้าของร้าน'); return; }   // บัญชีพนักงานเข้าหน้านี้ไม่ได้
   try {
     const snap = await get(A('admins/' + user.uid));
     if (snap.val() !== true) throw new Error('not admin');
@@ -555,7 +558,7 @@ setInterval(() => {
 }, 30000);
 
 /* ====== ข้อมูลสด ====== */
-const D = { branches: null, settings: null, staff: null, state: null, secret: null, requests: null, logsWin: {}, days: null, corrPending: null, calLast: null, logsReady: false };
+const D = { branches: null, settings: null, staff: null, state: null, requests: null, logsWin: {}, days: null, corrPending: null, calLast: null, logsReady: false };
 
 function listen(path, key) {
   unsubs.push(onValue(A(path), (s) => { D[key] = s.val() || {}; refresh(); }, (e) => console.warn('listen', path, e.code)));
@@ -578,7 +581,7 @@ function startApp() {
   winKey = ''; winUnsubs = [];
   unsubs.push(onValue(ref(db, '.info/serverTimeOffset'), (s) => { serverOffset = s.val() || 0; }));
   listen('branches', 'branches'); listen('settings', 'settings'); listen('staff', 'staff');
-  listen('state', 'state'); listen('staffSecret', 'secret'); listen('deviceRequests', 'requests');
+  listen('state', 'state'); listen('deviceRequests', 'requests');
   unsubs.push(onValue(query(A('corrections'), orderByChild('status'), equalTo('pending')), (s) => { D.corrPending = s.val() || {}; refresh(); }, (e) => console.warn('corr', e.code)));
   unsubs.push(onValue(query(A('calendar'), orderByKey(), limitToLast(1)), (s) => { D.calLast = Object.keys(s.val() || {})[0] || ''; refresh(); }, (e) => console.warn('calendar', e.code)));
   unsubs.push(() => { winUnsubs.forEach((u) => u()); winUnsubs = []; });
@@ -986,7 +989,7 @@ function gotoTimes(sid, d, openEditor, approveId) {
 
 /* ====== ตัวเลขบนแท็บ / แถบเตือนปฏิทิน ====== */
 function updateBadges() {
-  const reqs = Object.values(D.requests || {}).filter((r) => r && r.status === 'pending').length;
+  const reqs = Object.values(D.requests || {}).filter((r) => r && r.info && r.info.status === 'pending').length;
   const corrs = Object.values(D.corrPending || {}).filter((c) => c).length;
   const items = D.days ? reviewItems().length : 0;
   const n = reqs + corrs + items;
@@ -1488,7 +1491,7 @@ function haversineM(la1, ln1, la2, ln2) {
 
 function renderPending() {
   const root = $('#p-pending');
-  if (!D.requests || !D.staff || !D.secret || !D.days || !D.state || !D.branches) return;
+  if (!D.requests || !D.staff || !D.days || !D.state || !D.branches) return;
   if (!root.querySelector('#rvList')) {
     clear(root);
     root.append(h('h3', null, 'รอตรวจ'));
@@ -1501,7 +1504,7 @@ function renderPending() {
   clear(list);
   const items = reviewItems();
   const corrs = Object.entries(D.corrPending || {}).filter(([, c]) => c && typeof c === 'object').sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
-  const reqs = Object.entries(D.requests).filter(([, r]) => r && typeof r === 'object').sort((a, b) => (a[1].requestedAt || 0) - (b[1].requestedAt || 0));
+  const reqs = Object.entries(D.requests).filter(([, r]) => r && typeof r === 'object').sort((a, b) => ((a[1].info || {}).requestedAt || 0) - ((b[1].info || {}).requestedAt || 0));
 
   // ----- 1. รายการที่ต้องตรวจ -----
   list.append(h('h4', { id: 'secItems' }, `รายการที่ต้องตรวจ (${items.length})`));
@@ -1513,33 +1516,15 @@ function renderPending() {
   if (!corrs.length) list.append(h('div', { class: 'card muted' }, 'ไม่มีคำขอแก้เวลา'));
   for (const [cid, c] of corrs) list.append(corrCard(cid, c, corrs));
 
-  // ----- 3. คำขอผูกเครื่อง -----
-  list.append(h('h4', { id: 'secDev' }, `คำขอผูกเครื่อง (${reqs.filter(([, r]) => r.status === 'pending').length})`));
+  // ----- 3. คำขอสมัคร / ผูกเครื่อง -----
+  const pendReq = reqs.filter(([, r]) => r.info && r.info.status === 'pending');
+  list.append(h('h4', { id: 'secDev' }, `คำขอสมัคร / ผูกเครื่อง (${pendReq.length})`));
+  if (pendReq.filter(([, r]) => r.info.kind === 'register').length > 10) list.append(h('div', { class: 'notice', id: 'spamWarn' }, 'มีคำขอสมัครรออยู่มาก อาจเป็นสแปม — ปิดรับสมัครได้ที่ ตั้งค่าสาขา > ค่าทั่วไป'));
   if (!reqs.length) list.append(h('div', { class: 'card muted' }, 'ไม่มีคำขอที่รออยู่'));
-  for (const [uid, r] of reqs) {
-    const s = (D.staff || {})[r.staffId];
-    const secret = (D.secret || {})[r.staffId];
-    const pinOk = !!(secret && secret.pinHash && secret.pinHash === r.pinHash);
-    const replaces = s && s.uid && s.uid !== uid;
-    const other = Object.entries(D.staff).find(([sid, x]) => sid !== r.staffId && x && x.uid === uid);
-    const rejected = r.status === 'rejected';
-    const dup = !rejected && reqs.filter(([, x]) => x.staffId === r.staffId && x.status !== 'rejected').length > 1;
-    list.append(h('div', { class: 'card req' },
-      h('div', null,
-        h('div', null, h('b', null, s ? s.nickname : '(ไม่พบพนักงาน)'), ' ขอผูกเครื่อง'),
-        dup && h('div', { class: 'notice' }, 'มีคำขอหลายรายการสำหรับชื่อนี้ — ตรวจให้ดีก่อนอนุมัติ'),
-        h('div', { style: 'font-weight:700;margin-top:4px' }, 'ขอเมื่อ ', r.requestedAt ? fmtTime(r.requestedAt) + ' น. ' + bangkokDate(r.requestedAt) : '-'),
-        h('div', { style: 'font-weight:600;word-break:break-all;max-width:520px' }, 'เครื่อง: ', r.userAgent || '-'),
-        h('div', null,
-          h('span', { class: 'tag ' + (pinOk ? 'ok' : 'bad') }, pinOk ? 'PIN ถูกต้อง ✔' : 'PIN ไม่ตรง ✘'),
-          replaces && h('span', { class: 'tag late' }, 'จะแทนเครื่องเดิม'),
-          other && h('span', { class: 'tag late' }, 'เครื่องนี้ผูกกับ ' + other[1].nickname + ' อยู่ จะย้ายให้'),
-          rejected && h('span', { class: 'tag' }, 'ไม่อนุมัติแล้ว'))),
-      h('div', { class: 'row' },
-        s && !rejected && h('button', { class: 'btn' + (pinOk ? '' : ' gray'), onclick: () => approve(uid, r, s, pinOk, other) }, pinOk ? '✔ อนุมัติ' : 'อนุมัติทั้งที่ PIN ไม่ตรง'),
-        !rejected && h('button', { class: 'btn orange', onclick: () => rejectReq(uid) }, '✘ ไม่อนุมัติ'),
-        h('button', { class: 'btn gray', onclick: () => removeReq(uid) }, 'ลบ'))));
-  }
+  for (const [uid, r] of reqs) list.append(requestCard(uid, r));
+  if (reqs.length) list.append(h('div', { class: 'row' },
+    h('button', { class: 'btn small gray', id: 'bulkRej', onclick: () => bulkRemoveRequests('rejected') }, 'ลบคำขอที่ไม่อนุมัติทั้งหมด'),
+    h('button', { class: 'btn small gray', id: 'bulkOld', onclick: () => bulkRemoveRequests('old') }, 'ลบคำขอสมัครที่ค้างเกิน 14 วัน')));
   if (selectedKey) { const it = items.find((x) => x.key === selectedKey); if (it) document.querySelectorAll('#rvList .rvcard').forEach((el) => el.classList.toggle('sel', el.dataset.key === selectedKey)); }
 }
 
@@ -1826,19 +1811,129 @@ async function openApplyCorrection(cid, c, editable) {
   recompute();
 }
 
-/* ====== 3.1 คำขอผูกเครื่อง (ของเดิม) ====== */
-async function approve(uid, r, s, pinOk, other) {
-  if (!pinOk && !(await confirmBox('PIN ไม่ตรง', `PIN ที่ ${s.nickname} ใส่ไม่ตรงกับที่ตั้งไว้ ยืนยันอนุมัติหรือไม่`, 'อนุมัติ', 'orange'))) return;
-  const sid = r.staffId;
+/* ====== 3.1 คำขอสมัคร / ผูกเครื่อง (Auth v2) ====== */
+const REQF = {};   // uid -> ค่าที่เจ้าของกำลังกรอกในการ์ด (เก็บไว้เพราะรายการวาดใหม่ทุกครั้งที่ข้อมูลเปลี่ยน)
+function reqForm(uid, req) {
+  if (!REQF[uid]) {
+    const info = req.info || {};
+    const first = Object.keys(D.branches || {})[0] || '';
+    REQF[uid] = { nick: info.nickname || '', mode: 'new', link: '', branch: first, start: '07:00', end: '18:00' };
+  }
+  return REQF[uid];
+}
+/** ย่อ userAgent ให้อ่านง่าย (ข้อความเต็มอยู่ใน title) */
+function shortUA(ua) {
+  ua = String(ua || '');
+  const os = /iPhone|iPad|iPod/.test(ua) ? 'iPhone/iPad' : /Android ([\d.]+)/.test(ua) ? 'Android ' + RegExp.$1 : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+  const br = /Edg\//.test(ua) ? 'Edge' : /CriOS|Chrome\//.test(ua) ? 'Chrome' : /FxiOS|Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : '';
+  return [os, br].filter(Boolean).join(' · ') || ua.slice(0, 40) || '-';
+}
+function requestCard(uid, req) {
+  const info = req.info || {};
+  const rejected = info.status === 'rejected';
+  const st = (D.staff || {});
+  const acct = Object.entries(st).find(([, x]) => x && x.uid === uid);
+  const f = reqForm(uid, req);
+  const when = info.requestedAt ? `${bangkokDate(info.requestedAt)} ${fmtTime(info.requestedAt)} น.` : '-';
+  const tags = [];
+  if (info.standalone !== true) tags.push(h('span', { class: 'tag late' }, 'ยังไม่ได้ติดตั้งเป็นแอป — อนุมัติแล้วอาจต้องอนุมัติซ้ำ'));
+  if (rejected) tags.push(h('span', { class: 'tag' }, 'ไม่อนุมัติแล้ว'));
+  const ua = h('div', { class: 'muted', style: 'word-break:break-all;max-width:560px', title: info.userAgent || '' }, 'เครื่อง: ' + shortUA(info.userAgent));
+  const btns = [];
+  let body;
+  if (info.kind === 'device') {
+    const sid = acct ? acct[0] : null, s = acct ? acct[1] : null;
+    const replaces = !!(s && s.deviceId);
+    if (replaces) tags.push(h('span', { class: 'tag late' }, 'จะแทนเครื่องเดิม' + (s.deviceAt ? ` (ผูกตั้งแต่ ${bangkokDate(s.deviceAt).slice(5).split('-').reverse().join('/')})` : '')));
+    body = h('div', null, h('b', null, s ? s.nickname : '(ไม่พบพนักงาน)'), ' ', s ? h('span', { class: 'muted' }, '@' + s.username) : null, ' ขอใช้มือถือเครื่องนี้', h('div', null, tags), ua, h('div', { class: 'muted' }, 'ขอเมื่อ ' + when));
+    if (s && !rejected) btns.push(h('button', { class: 'btn r-appr', onclick: () => approveDevice(uid, req, sid, s, replaces) }, '✔ อนุมัติเครื่องนี้'));
+  } else {
+    if (info.relink) tags.push(h('div', { class: 'tag bad r-warn', style: 'display:block;white-space:normal' }, `โทรยืนยันกับพนักงานก่อน — ผู้สมัครอ้างว่าเป็น ${info.oldUsername ? '@' + info.oldUsername : 'พนักงานเดิม'} (ไม่เลือกให้อัตโนมัติ ต้องเลือกพนักงานเดิมเองจากรายการ "เชื่อมกับพนักงานเดิม")`));
+    const nick = h('input', { type: 'text', class: 'f-nick', maxlength: 20, '.value': f.nick });
+    nick.addEventListener('input', () => { f.nick = nick.value; });
+    const mNew = h('input', { type: 'radio', name: 'mode_' + uid, class: 'f-mode-new', '.checked': f.mode === 'new' });
+    const mLink = h('input', { type: 'radio', name: 'mode_' + uid, class: 'f-mode-link', '.checked': f.mode === 'link' });
+    const link = h('select', { class: 'f-link' }, h('option', { value: '' }, '— เลือกพนักงาน —'), Object.entries(st).filter(([, x]) => x).sort((a, b) => (a[1].nickname || '').localeCompare(b[1].nickname || '', 'th')).map(([sid, x]) => h('option', { value: sid }, `${x.nickname} (@${x.username || '-'})`)));
+    link.value = f.link;
+    const br = branchSelect(f.branch); br.classList.add('f-branch');
+    const s1 = h('input', { type: 'text', class: 'f-start', size: 6, maxlength: 5, '.value': f.start }), s2 = h('input', { type: 'text', class: 'f-end', size: 6, maxlength: 5, '.value': f.end });
+    mNew.addEventListener('change', () => { f.mode = 'new'; });
+    mLink.addEventListener('change', () => { f.mode = 'link'; });
+    link.addEventListener('change', () => { f.link = link.value; if (link.value) { f.mode = 'link'; mLink.checked = true; } });
+    br.addEventListener('change', () => { f.branch = br.value; });
+    s1.addEventListener('input', () => { f.start = s1.value; }); s2.addEventListener('input', () => { f.end = s2.value; });
+    body = h('div', null,
+      h('div', null, h('b', null, '@' + (info.username || '?')), ' ขอสมัครใช้งาน ', h('label', { style: 'font-weight:400' }, 'ชื่อเล่น ', nick)),
+      h('div', null, tags), ua, h('div', { class: 'muted' }, 'ขอเมื่อ ' + when),
+      !rejected && h('div', { class: 'row' },
+        h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, mNew, 'สร้างพนักงานใหม่'),
+        h('label', null, 'สาขาหลัก', br), h('label', null, 'เข้ากะ', s1), h('label', null, 'เลิกกะ', s2)),
+      !rejected && h('div', { class: 'row' }, h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, mLink, 'เชื่อมกับพนักงานเดิม'), h('label', null, link)));
+    if (!rejected) btns.push(h('button', { class: 'btn r-appr', onclick: () => approveRegister(uid, req) }, '✔ อนุมัติ'));
+  }
+  if (!rejected) btns.push(h('button', { class: 'btn orange r-rej', onclick: () => rejectReq(uid) }, '✘ ไม่อนุมัติ'));
+  btns.push(h('button', { class: 'btn gray r-del', onclick: () => removeReq(uid) }, 'ลบ'));
+  return h('div', { class: 'card req reqcard', 'data-uid': uid, 'data-kind': info.kind || '' }, body, h('div', { class: 'row' }, btns));
+}
+/** อ่านคำขอล่าสุดจากฐานข้อมูลก่อนอนุมัติ: key/did/requestedAt ต้องตรงกับที่เจ้าของเห็น (กันกรณีผู้ขอลบแล้วสร้างคำขอใหม่) */
+async function reqUnchanged(uid, req) {
+  let cur = null;
+  try { cur = (await get(A('deviceRequests/' + uid))).val(); } catch (e) { toast('อ่านคำขอไม่สำเร็จ: ' + (e.code || e.message)); return false; }
+  const a = (cur && cur.info) || {}, b = req.info || {};
+  if (!cur || cur.key !== req.key || a.did !== b.did || a.requestedAt !== b.requestedAt || a.kind !== b.kind || a.username !== b.username) { toast('คำขอเปลี่ยนแล้ว โหลดใหม่'); return false; }
+  return true;
+}
+const SHIFT_RE2 = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+async function approveRegister(uid, req) {
+  const info = req.info, f = reqForm(uid, req);
+  if (f.mode === 'link') return approveRelink(uid, req, f);
+  const nick = f.nick.trim();
+  if (!nick || nick.length > 20) return toast('ชื่อเล่นไม่ถูกต้อง (1-20 ตัวอักษร)');
+  if (!f.branch || !(D.branches || {})[f.branch]) return toast('เลือกสาขาหลัก');
+  if (!SHIFT_RE2.test(f.start) || !SHIFT_RE2.test(f.end)) return toast('เวลาเข้ากะ/เลิกกะต้องเป็น HH:MM');
+  if (!(await reqUnchanged(uid, req))) return;
+  const sid = push(A('staff')).key;
   const up = {
-    [`staff/${sid}/uid`]: uid, [`staff/${sid}/deviceApproved`]: true, [`staff/${sid}/deviceApprovedAt`]: serverTimestamp(),
-    [`deviceRequests/${uid}`]: null
+    [`staff/${sid}`]: { nickname: nick, username: info.username, branchId: f.branch, shiftStart: f.start, shiftEnd: f.end, active: true, uid, deviceId: info.did, deviceAt: serverTimestamp(), createdAt: serverTimestamp() },
+    [`accounts/${uid}`]: sid, [`deviceKeys/${sid}`]: { k: req.key, did: info.did, at: serverTimestamp() }, [`deviceRequests/${uid}`]: null
   };
-  if (other) { up[`staff/${other[0]}/uid`] = null; up[`staff/${other[0]}/deviceApproved`] = false; }
+  bestEffortAudit(up, 'staff/' + sid, null, { nickname: nick, username: info.username, uid }, 'approve_register');
+  try { await update(A(''), up); delete REQF[uid]; } catch (e) { toast('อนุมัติไม่สำเร็จ: ' + (e.code || e.message)); }
+}
+/** เชื่อมบัญชีใหม่กับพนักงานเดิม (relink): sid เดิม uid ใหม่ กุญแจเครื่องใหม่จากคำขอ */
+async function approveRelink(uid, req, f) {
+  const info = req.info, sid = f.link, old = (D.staff || {})[sid];
+  if (!old) return toast('เลือกพนักงานเดิมที่จะเชื่อม');
+  if (!(await confirmBox('เชื่อมกับพนักงานเดิม', `โทรยืนยันกับพนักงานก่อน — ผู้สมัครอ้างว่าเป็น ${info.oldUsername ? '@' + info.oldUsername : '(ไม่ระบุ)'} | พนักงานเดิมที่เลือก: ${old.nickname} (@${old.username || '-'}) | ผู้ขอใหม่: ${info.nickname || '-'} (@${info.username}) | บัญชีเดิมจะใช้ไม่ได้อีก และ @${info.username} จะเป็นบัญชีของ ${old.nickname} แทน (ประวัติเวลางานเดิมยังอยู่) ยืนยันหรือไม่`, 'เชื่อมบัญชี', 'orange'))) return;
+  if (!(await reqUnchanged(uid, req))) return;
+  const up = {
+    [`staff/${sid}/uid`]: uid, [`staff/${sid}/username`]: info.username, [`staff/${sid}/deviceId`]: info.did, [`staff/${sid}/deviceAt`]: serverTimestamp(),
+    [`deviceKeys/${sid}`]: { k: req.key, did: info.did, at: serverTimestamp() }, [`accounts/${uid}`]: sid, [`deviceRequests/${uid}`]: null, [`devproof/${sid}`]: null
+  };
+  if (old.uid) { up[`accounts/${old.uid}`] = null; if ((D.requests || {})[old.uid]) up[`deviceRequests/${old.uid}`] = null; }
+  bestEffortAudit(up, 'staff/' + sid, { uid: old.uid, username: old.username }, { uid, username: info.username }, 'relink_account');
+  try { await update(A(''), up); delete REQF[uid]; } catch (e) { toast('เชื่อมบัญชีไม่สำเร็จ: ' + (e.code || e.message)); }
+}
+async function approveDevice(uid, req, sid, s, replaces) {
+  if (replaces && !(await confirmBox('อนุมัติเครื่องใหม่', `เครื่องเดิมของ ${s.nickname} จะลงเวลาไม่ได้ทันที ยืนยันหรือไม่`, 'อนุมัติ', 'orange'))) return;
+  const info = req.info;
+  if (!(await reqUnchanged(uid, req))) return;
+  const up = {
+    [`deviceKeys/${sid}`]: { k: req.key, did: info.did, at: serverTimestamp() }, [`staff/${sid}/deviceId`]: info.did, [`staff/${sid}/deviceAt`]: serverTimestamp(), [`deviceRequests/${uid}`]: null, [`devproof/${sid}`]: null
+  };
+  bestEffortAudit(up, 'staff/' + sid, { deviceId: s.deviceId }, { deviceId: info.did }, 'approve_device');
   try { await update(A(''), up); } catch (e) { toast('อนุมัติไม่สำเร็จ: ' + (e.code || e.message)); }
 }
-async function rejectReq(uid) { try { await update(A('deviceRequests/' + uid), { status: 'rejected' }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
-async function removeReq(uid) { try { await remove(A('deviceRequests/' + uid)); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
+async function rejectReq(uid) { try { await update(A('deviceRequests/' + uid + '/info'), { status: 'rejected' }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
+async function removeReq(uid) { try { await remove(A('deviceRequests/' + uid)); delete REQF[uid]; } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); } }
+async function bulkRemoveRequests(kind) {
+  const now = serverNow();
+  const ids = Object.entries(D.requests || {}).filter(([, r]) => r && r.info && (kind === 'rejected' ? r.info.status === 'rejected' : r.info.kind === 'register' && r.info.status === 'pending' && now - (r.info.requestedAt || now) > 14 * 86400000)).map(([u]) => u);
+  if (!ids.length) return toast('ไม่มีรายการที่ตรงเงื่อนไข');
+  if (!(await confirmBox('ลบคำขอ', `ลบคำขอ ${ids.length} รายการ ยืนยันหรือไม่`, 'ลบ'))) return;
+  const up = {}; for (const u of ids) up[`deviceRequests/${u}`] = null;
+  try { await update(A(''), up); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
+}
 
 /* ====== ปฏิทินวันทำงาน (ข้อ 8.4) ====== */
 function updateCalendarCard() {
@@ -2046,74 +2141,110 @@ async function exportCsv(kind) {
   downloadCsv(`attendance-${kind}_${rp.from}_${rp.to}${R.sid !== 'all' ? '_' + R.sid : ''}.csv`, text);
 }
 
-/* ====== 3. พนักงาน ====== */
-const PIN_RE = /^[0-9]{4}$/, SHIFT_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+/* ====== 3. พนักงาน (Auth v2: ชื่อผู้ใช้ + รหัสผ่าน, ผูกเครื่องด้วยกุญแจ) ====== */
+const SHIFT_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 function branchSelect(val) {
   const sel = h('select');
   for (const [bid, b] of Object.entries(D.branches || {})) sel.append(h('option', { value: bid }, b.name || bid));
   if (val) sel.value = val;
   return sel;
 }
+/** ข้อความผิดพลาดของ Firebase Auth เป็นภาษาไทย (ชุดเดียวกับแอปพนักงาน) */
+const authErrMsg = (e) => ({
+  'auth/email-already-in-use': "ชื่อผู้ใช้นี้มีคนใช้แล้ว — ลองชื่ออื่น",
+  'auth/weak-password': 'รหัสผ่านต้องมีอย่างน้อย ' + PW_MIN + ' ตัว',
+  'auth/password-does-not-meet-requirements': 'รหัสผ่านต้องมีอย่างน้อย ' + PW_MIN + ' ตัว',
+  'auth/invalid-email': 'ชื่อผู้ใช้ไม่ถูกต้อง',
+  'auth/network-request-failed': 'ไม่มีอินเทอร์เน็ต — ต่อเน็ตแล้วลองใหม่',
+  'auth/too-many-requests': 'ลองหลายครั้งเกินไป รอสักครู่แล้วลองใหม่',
+  'auth/operation-not-allowed': 'ยังไม่ได้เปิด Email/Password ใน Firebase Console',
+  'auth/admin-restricted-operation': 'ยังไม่ได้เปิดการสมัคร (sign-up) ใน Firebase Console'
+}[e && e.code] || 'ไม่สำเร็จ: ' + ((e && (e.code || e.message)) || ''));
+
+/** สร้างบัญชีพนักงานโดยแอดมินไม่หลุด: ใช้ Firebase app ตัวที่สอง ('provision', ไม่เก็บ session) */
+let provAuth = null;
+async function provisionAccount(username, password) {
+  if (!provAuth) {
+    const pApp = initializeApp(DEMO ? { demo: true } : EMU ? EMU_CFG : FIREBASE_CONFIG, 'provision');
+    provAuth = initializeAuth(pApp, { persistence: inMemoryPersistence });
+    if (EMU) connectAuthEmulator(provAuth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  }
+  try { return (await createUserWithEmailAndPassword(provAuth, staffEmail(username), password)).user.uid; }
+  finally { try { await signOut(provAuth); } catch (_) { } }
+}
 function renderStaff() {
   const root = $('#p-staff');
   if (!D.staff || !D.branches) return;
-  // ไม่วาดทับขณะกำลังพิมพ์ในฟอร์มเพิ่มพนักงาน
+  // ไม่วาดทับขณะกำลังพิมพ์ในฟอร์มสร้างบัญชี
   const keep = root.querySelector('#addForm');
-  const vals = keep ? { n: $('#addN').value, b: $('#addB').value, s: $('#addS').value, e: $('#addE').value, p1: $('#addP1').value, p2: $('#addP2').value } : null;
+  const vals = keep ? { u: $('#addU').value, n: $('#addN').value, b: $('#addB').value, s: $('#addS').value, e: $('#addE').value, p1: $('#addP1').value, p2: $('#addP2').value } : null;
   clear(root);
   root.append(h('h3', null, 'พนักงาน'));
   const hasBranch = Object.keys(D.branches).length > 0;
+  const addU = h('input', { type: 'text', id: 'addU', maxlength: 20, placeholder: 'a-z 0-9 _ (3-20)', autocapitalize: 'none', autocomplete: 'off' });
   const addN = h('input', { type: 'text', id: 'addN', maxlength: 20, placeholder: 'ชื่อเล่น' });
   const addB = branchSelect(); addB.id = 'addB';
   const addS = h('input', { type: 'text', id: 'addS', value: '07:00', size: 6, maxlength: 5 });
   const addE = h('input', { type: 'text', id: 'addE', value: '18:00', size: 6, maxlength: 5 });
-  const addP1 = h('input', { type: 'password', id: 'addP1', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
-  const addP2 = h('input', { type: 'password', id: 'addP2', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
-  if (vals) { addN.value = vals.n; if (vals.b) addB.value = vals.b; addS.value = vals.s; if (vals.e) addE.value = vals.e; addP1.value = vals.p1; addP2.value = vals.p2; }
+  const addP1 = h('input', { type: 'password', id: 'addP1', size: 12, autocomplete: 'new-password' });
+  const addP2 = h('input', { type: 'password', id: 'addP2', size: 12, autocomplete: 'new-password' });
+  if (vals) { addU.value = vals.u; addN.value = vals.n; if (vals.b) addB.value = vals.b; addS.value = vals.s; if (vals.e) addE.value = vals.e; addP1.value = vals.p1; addP2.value = vals.p2; }
   const msg = h('span', { class: 'err', id: 'addErr' });
-  root.append(h('div', { class: 'card', id: 'addForm' }, h('b', null, 'เพิ่มพนักงาน'),
+  root.append(h('div', { class: 'card', id: 'addForm' }, h('b', null, 'สร้างบัญชีให้พนักงาน'),
+    h('div', { class: 'muted' }, 'พนักงานสมัครเองในแอปได้ด้วย (ไปแท็บ รอตรวจ เพื่ออนุมัติ) ใช้ฟอร์มนี้เมื่อต้องการตั้งบัญชีให้'),
     !hasBranch && h('div', { class: 'notice' }, 'ต้องสร้างสาขาก่อน (แท็บ "ตั้งค่าสาขา")'),
     h('div', { class: 'row' },
-      h('label', null, 'ชื่อเล่น', addN), h('label', null, 'สาขาหลัก', addB), h('label', null, 'เวลาเข้ากะ (HH:MM)', addS), h('label', null, 'เวลาเลิกกะ (HH:MM)', addE),
-      h('label', null, 'PIN 4 หลัก', addP1), h('label', null, 'PIN อีกครั้ง', addP2),
-      h('button', { class: 'btn', disabled: !hasBranch, onclick: () => addStaff(addN, addB, addS, addE, addP1, addP2, msg) }, 'เพิ่ม')),
+      h('label', null, 'ชื่อผู้ใช้', addU), h('label', null, 'ชื่อเล่น', addN), h('label', null, 'สาขาหลัก', addB), h('label', null, 'เข้ากะ', addS), h('label', null, 'เลิกกะ', addE),
+      h('label', null, 'รหัสผ่าน (อย่างน้อย ' + PW_MIN + ' ตัว)', addP1), h('label', null, 'รหัสผ่านอีกครั้ง', addP2),
+      h('button', { class: 'btn', id: 'addBtn', disabled: !hasBranch, onclick: () => addStaff(addU, addN, addB, addS, addE, addP1, addP2, msg) }, 'สร้างบัญชี')),
     msg));
   const tb = h('tbody');
   const rows = Object.entries(D.staff).sort((a, b) => (a[1].nickname || '').localeCompare(b[1].nickname || '', 'th'));
   for (const [sid, s] of rows) {
-    const dev = s.uid && s.deviceApproved ? 'ผูกเครื่องแล้ว' : 'ยังไม่ผูกเครื่อง';
-    tb.append(h('tr', null,
+    const ddmm = (ms) => bangkokDate(ms).slice(5).split('-').reverse().join('/');
+    const dev = !s.uid ? 'ยังไม่มีบัญชี' : s.deviceId ? 'ผูกแล้ว' + (s.deviceAt ? ' ' + ddmm(s.deviceAt) : '') : 'ยังไม่ผูกเครื่อง';
+    tb.append(h('tr', { 'data-sid': sid },
       h('td', null, h('b', null, s.nickname)),
+      h('td', null, s.username || '-'),
       h('td', null, ((D.branches || {})[s.branchId] || {}).name || s.branchId),
       h('td', null, s.shiftStart),
       h('td', null, s.shiftEnd || '18:00'),
       h('td', null, h('span', { class: 'tag ' + (s.active === false ? 'bad' : 'ok') }, s.active === false ? 'ปิดใช้งาน' : 'ใช้งาน')),
-      h('td', null, h('span', { class: 'tag ' + (s.uid && s.deviceApproved ? 'ok' : '') }, dev)),
+      h('td', null, h('span', { class: 'tag st-dev ' + (s.deviceId ? 'ok' : '') }, dev)),
       h('td', null, h('div', { class: 'row', style: 'margin:0' },
-        h('button', { class: 'btn small blue', onclick: () => editStaff(sid, s) }, 'แก้ไข'),
-        h('button', { class: 'btn small orange', onclick: () => resetPin(sid, s) }, 'รีเซ็ต PIN'),
-        s.uid && h('button', { class: 'btn small gray', onclick: () => unbind(sid, s) }, 'ยกเลิกผูกเครื่อง'),
-        h('button', { class: 'btn small ' + (s.active === false ? '' : 'red'), onclick: () => toggleActive(sid, s) }, s.active === false ? 'เปิดบัญชี' : 'ปิดบัญชี')))));
+        h('button', { class: 'btn small blue s-edit', onclick: () => editStaff(sid, s) }, 'แก้ไข'),
+        s.deviceId && h('button', { class: 'btn small gray s-unbind', onclick: () => unbind(sid, s) }, 'ยกเลิกผูกเครื่อง'),
+        s.uid && h('button', { class: 'btn small orange s-relink', onclick: () => relinkByOwner(sid, s) }, 'ตั้งบัญชีใหม่ (ลืมรหัส)'),
+        h('button', { class: 'btn small s-toggle ' + (s.active === false ? '' : 'red'), onclick: () => toggleActive(sid, s) }, s.active === false ? 'เปิดบัญชี' : 'ปิดบัญชี')))));
   }
-  root.append(h('table', null, h('thead', null, h('tr', null, ['ชื่อเล่น', 'สาขาหลัก', 'เวลาเข้ากะ', 'เวลาเลิกกะ', 'บัญชี', 'เครื่อง', ''].map((t) => h('th', null, t)))), tb));
+  root.append(h('table', null, h('thead', null, h('tr', null, ['ชื่อเล่น', 'ชื่อผู้ใช้', 'สาขาหลัก', 'เวลาเข้ากะ', 'เวลาเลิกกะ', 'บัญชี', 'เครื่อง', ''].map((t) => h('th', null, t)))), tb));
 }
-async function addStaff(n, b, s, e, p1, p2, msg) {
+function checkUserPw(u, p1, p2) {
+  if (!USERNAME_RE.test(u)) return 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z, 0-9 และ _ ยาว 3-20 ตัว (ไม่ใช้ภาษาไทย/ช่องว่าง)';
+  if (String(p1).length < PW_MIN) return 'รหัสผ่านต้องมีอย่างน้อย ' + PW_MIN + ' ตัว';
+  if (p1 !== p2) return 'รหัสผ่านสองช่องไม่ตรงกัน';
+  return '';
+}
+async function addStaff(uEl, n, b, s, e, p1, p2, msg) {
   msg.textContent = '';
-  const nick = n.value.trim();
+  const un = normUser(uEl.value), nick = n.value.trim();
   if (!nick || nick.length > 20) return (msg.textContent = 'กรอกชื่อเล่น (ไม่เกิน 20 ตัวอักษร)');
   if (!b.value) return (msg.textContent = 'เลือกสาขา');
   if (!SHIFT_RE.test(s.value)) return (msg.textContent = 'เวลาเข้ากะต้องเป็นรูปแบบ HH:MM เช่น 07:00');
   if (!SHIFT_RE.test(e.value)) return (msg.textContent = 'เวลาเลิกกะต้องเป็นรูปแบบ HH:MM เช่น 18:00');
-  if (!PIN_RE.test(p1.value)) return (msg.textContent = 'PIN ต้องเป็นตัวเลข 4 หลัก');
-  if (p1.value !== p2.value) return (msg.textContent = 'PIN สองครั้งไม่ตรงกัน');
+  const bad = checkUserPw(un, p1.value, p2.value);
+  if (bad) return (msg.textContent = bad);
+  $('#addBtn').disabled = true;
+  let uid;
+  try { uid = await provisionAccount(un, p1.value); }
+  catch (err) { $('#addBtn').disabled = false; return (msg.textContent = authErrMsg(err)); }
   const sid = push(A('staff')).key;
-  try {
-    await update(A(''), {
-      [`staff/${sid}`]: { nickname: nick, branchId: b.value, shiftStart: s.value, shiftEnd: e.value, active: true, createdAt: serverTimestamp() },
-      [`staffSecret/${sid}`]: { pinHash: await sha256Hex(sid + p1.value) }
-    });
-    n.value = p1.value = p2.value = '';
-  } catch (e) { msg.textContent = 'บันทึกไม่สำเร็จ: ' + (e.code || e.message); }
+  const up = { [`staff/${sid}`]: { nickname: nick, username: un, branchId: b.value, shiftStart: s.value, shiftEnd: e.value, active: true, uid, createdAt: serverTimestamp() }, [`accounts/${uid}`]: sid };
+  bestEffortAudit(up, 'staff/' + sid, null, { nickname: nick, username: un, uid }, 'create_staff');
+  try { await update(A(''), up); } catch (err) { $('#addBtn').disabled = false; return (msg.textContent = `สร้างบัญชีแล้ว (uid ${uid}) แต่เขียนข้อมูลไม่สำเร็จ: ${err.code || err.message}`); }
+  uEl.value = n.value = p1.value = p2.value = '';
+  $('#addBtn').disabled = false;
+  toast(`สร้างบัญชีแล้ว บอกพนักงาน: ชื่อผู้ใช้ ${un} และรหัสผ่านที่ตั้งไว้ เปิดแอปแล้วกด "เข้าสู่ระบบ" จากนั้นกด "ขอใช้เครื่องนี้" (พนักงานสมัครเองในแอปได้ด้วย)`);
 }
 function editStaff(sid, s) {
   const n = h('input', { type: 'text', maxlength: 20, '.value': s.nickname });
@@ -2121,7 +2252,7 @@ function editStaff(sid, s) {
   const sh = h('input', { type: 'text', maxlength: 5, size: 6, '.value': s.shiftStart });
   const she = h('input', { type: 'text', maxlength: 5, size: 6, id: 'editEnd', placeholder: 'ค่าเริ่มต้น 18:00', '.value': s.shiftEnd || '' });
   const err = h('div', { class: 'err' });
-  openModal('แก้ไข ' + s.nickname, [h('div', { class: 'row' }, h('label', null, 'ชื่อเล่น', n), h('label', null, 'สาขาหลัก', b), h('label', null, 'เวลาเข้ากะ', sh), h('label', null, 'เวลาเลิกกะ', she)), err], [
+  openModal('แก้ไข ' + s.nickname, [h('div', { class: 'muted' }, 'ชื่อผู้ใช้: ' + (s.username || '-') + ' (แก้ไม่ได้ ผูกกับบัญชี)'), h('div', { class: 'row' }, h('label', null, 'ชื่อเล่น', n), h('label', null, 'สาขาหลัก', b), h('label', null, 'เวลาเข้ากะ', sh), h('label', null, 'เวลาเลิกกะ', she)), err], [
     { label: 'ยกเลิก' },
     { label: 'บันทึก', cls: 'blue', onClick: async () => {
       const nick = n.value.trim();
@@ -2136,22 +2267,31 @@ function editStaff(sid, s) {
     } }
   ]);
 }
-function resetPin(sid, s) {
-  const p1 = h('input', { type: 'password', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
-  const p2 = h('input', { type: 'password', inputmode: 'numeric', maxlength: 4, size: 6, autocomplete: 'new-password' });
-  const err = h('div', { class: 'err' });
-  openModal('รีเซ็ต PIN ของ ' + s.nickname, [h('div', { class: 'row' }, h('label', null, 'PIN ใหม่ 4 หลัก', p1), h('label', null, 'อีกครั้ง', p2)), err], [
+/** ตั้งบัญชีใหม่ให้พนักงานที่ลืมรหัส (ทาง B): sid เดิม uid ใหม่ เก็บกุญแจเครื่องเดิมไว้ */
+function relinkByOwner(sid, s) {
+  const u = h('input', { type: 'text', id: 'rlUser', maxlength: 20, autocapitalize: 'none', '.value': (s.username || '').slice(0, 19) + '2' });
+  const p1 = h('input', { type: 'password', id: 'rlP1', autocomplete: 'new-password' }), p2 = h('input', { type: 'password', id: 'rlP2', autocomplete: 'new-password' });
+  const err = h('div', { class: 'err', id: 'rlErr' });
+  openModal('ตั้งบัญชีใหม่ให้ ' + s.nickname, [h('div', { class: 'muted' }, `บัญชีเดิม @${s.username || '-'} จะใช้ไม่ได้อีก ประวัติเวลางานเดิมยังอยู่ มือถือเครื่องเดิมใช้ต่อได้ทันทีหลังล็อกอินด้วยชื่อใหม่`),
+    h('div', { class: 'row' }, h('label', null, 'ชื่อผู้ใช้ใหม่', u), h('label', null, 'รหัสผ่านใหม่', p1), h('label', null, 'อีกครั้ง', p2)), err], [
     { label: 'ยกเลิก' },
-    { label: 'ยืนยันเปลี่ยน PIN', cls: 'orange', onClick: async () => {
-      if (!PIN_RE.test(p1.value)) { err.textContent = 'PIN ต้องเป็นตัวเลข 4 หลัก'; return false; }
-      if (p1.value !== p2.value) { err.textContent = 'PIN สองครั้งไม่ตรงกัน'; return false; }
-      try { await set(A('staffSecret/' + sid), { pinHash: await sha256Hex(sid + p1.value) }); } catch (e) { err.textContent = 'ไม่สำเร็จ: ' + (e.code || e.message); return false; }
+    { label: 'ตั้งบัญชีใหม่', cls: 'orange', onClick: async () => {
+      const un = normUser(u.value), bad = checkUserPw(un, p1.value, p2.value);
+      if (bad) { err.textContent = bad; return false; }
+      let uid; try { uid = await provisionAccount(un, p1.value); } catch (e) { err.textContent = authErrMsg(e); return false; }
+      const up = { [`staff/${sid}/uid`]: uid, [`staff/${sid}/username`]: un, [`accounts/${uid}`]: sid };
+      if (s.uid) up[`accounts/${s.uid}`] = null;
+      bestEffortAudit(up, 'staff/' + sid, { uid: s.uid, username: s.username }, { uid, username: un }, 'relink_account');
+      try { await update(A(''), up); } catch (e) { err.textContent = `สร้างบัญชีแล้ว (uid ${uid}) แต่เขียนข้อมูลไม่สำเร็จ: ${e.code || e.message}`; return false; }
+      toast(`ตั้งบัญชีใหม่แล้ว บอก ${s.nickname}: ชื่อผู้ใช้ ${un} และรหัสผ่านที่ตั้งไว้`);
     } }
   ]);
 }
 async function unbind(sid, s) {
-  if (!(await confirmBox('ยกเลิกผูกเครื่อง', `เครื่องของ ${s.nickname} จะใช้ลงเวลาไม่ได้ทันที และต้องลงทะเบียนใหม่ ยืนยันหรือไม่`, 'ยกเลิกผูกเครื่อง'))) return;
-  try { await update(A('staff/' + sid), { uid: null, deviceApproved: false }); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
+  if (!(await confirmBox('ยกเลิกผูกเครื่อง', `เครื่องของ ${s.nickname} จะลงเวลาไม่ได้ทันที และต้องกด "ขอใช้เครื่องนี้" ใหม่ ยืนยันหรือไม่`, 'ยกเลิกผูกเครื่อง'))) return;
+  const up = { [`deviceKeys/${sid}`]: null, [`staff/${sid}/deviceId`]: null, [`staff/${sid}/deviceAt`]: null, [`devproof/${sid}`]: null };
+  bestEffortAudit(up, 'staff/' + sid, { deviceId: s.deviceId }, { deviceId: 'none' }, 'unbind_device');
+  try { await update(A(''), up); } catch (e) { toast('ไม่สำเร็จ: ' + (e.code || e.message)); }
 }
 async function toggleActive(sid, s) {
   const to = s.active === false;
@@ -2297,12 +2437,16 @@ function renderBranches() {
     const lg = h('input', { type: 'number', min: 0, max: 120, id: 'lateGrace', style: 'width:80px' });
     const rdI = h('input', { type: 'number', min: 7, max: 92, id: 'reviewDays', style: 'width:80px' });
     const cdI = h('input', { type: 'number', min: 1, max: 62, id: 'correctionDays', style: 'width:80px' });
+    const regChk = h('input', { type: 'checkbox', id: 'regOpen' });
+    regChk.checked = !D.settings || D.settings.registrationOpen !== false;
+    regChk.addEventListener('change', async () => { try { await set(A('settings/registrationOpen'), regChk.checked); } catch (e) { regChk.checked = !regChk.checked; toast('ไม่สำเร็จ: ' + (e.code || e.message)); } });
     const lgMsg = h('span', { class: 'err', id: 'generalMsg' });
     root.append(h('div', { class: 'card', id: 'general' }, h('h3', null, 'ค่าทั่วไป'),
       h('div', { class: 'row' },
         h('label', null, 'นับว่ามาสายเมื่อเกินเวลากะ (นาที)', lg),
         h('label', null, 'คิวรอตรวจดูย้อนหลัง (วัน) 7-92', rdI),
         h('label', null, 'พนักงานขอแก้เวลาย้อนหลังได้ (วัน) 1-62', cdI),
+        h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, regChk, 'เปิดรับสมัครพนักงานใหม่ในแอป'),
         h('button', { class: 'btn', id: 'generalSave', onclick: async () => {
           const v1 = Number(lg.value), v2 = Number(rdI.value), v3 = Number(cdI.value);
           if (!(v1 >= 0 && v1 <= 120)) { lgMsg.textContent = 'เวลาสายต้องอยู่ระหว่าง 0-120'; return; }
@@ -2327,6 +2471,7 @@ function renderBranches() {
     for (const bid of ids) mapCards.get(bid).update(D.branches[bid]);
     for (const [id, val] of [['lateGrace', D.settings.lateGraceMin ?? 5], ['reviewDays', D.settings.reviewDays ?? 31], ['correctionDays', D.settings.correctionDays ?? 7]]) { const el = $('#' + id); if (el && document.activeElement !== el) el.value = val; }
     updateCalendarCard();
+    const rc = $('#regOpen'); if (rc) rc.checked = D.settings.registrationOpen !== false;
   }
 }
 async function seedBranches() {

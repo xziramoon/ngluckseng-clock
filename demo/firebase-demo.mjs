@@ -3,6 +3,7 @@
 // ใช้เฉพาะ API เท่าที่แอปทั้งสองใช้จริง ข้อมูลอยู่ในเบราว์เซอร์นี้เท่านั้น แท็บที่เปิดพร้อมกันเห็นการเปลี่ยนแปลงของกันและกันทันที (BroadcastChannel + storage event)
 
 // แยกคีย์ localStorage/sessionStorage ที่แอปใช้ ('clock.last', 'clock.hist.*', 'clock.corrSeen', 'clock.skipInstall') ออกจากของจริงบน origin เดียวกัน
+// โค้ดเดโมทุกจุดที่แตะ localStorage ใช้คีย์ที่ขึ้นต้น 'clockdemo.' อยู่แล้ว (หรือผ่านตัวแปลงด้านล่าง) จึงไม่อ่าน/เขียน/ลบ 'clock.dev' ของมือถือจริง
 // โมดูลนี้โหลดเฉพาะตอน ?demo=1 จึงไม่กระทบหน้าใช้งานจริง
 {
   const P = Storage.prototype, g = P.getItem, st = P.setItem, rm = P.removeItem;
@@ -14,11 +15,15 @@
 const KEY = 'clockdemo.db.v1';
 const CH = 'clockdemo.channel';
 export const DEMO_ADMIN = { email: 'admin@demo', password: 'demo1234', uid: 'demoAdminUid000000000000000000' };
+export const DEMO_DOMAIN = '@staff.ngluckseng.invalid';
+// บัญชีพนักงานตัวอย่าง (Auth v2): ชื่อผู้ใช้/รหัสผ่าน ดู docs/plan-auth-v2.md ข้อ 9
 export const DEMO_STAFF = [
-  { sid: '-DemoStaffA01', nickname: 'เอ', pin: '1111' },
-  { sid: '-DemoStaffB02', nickname: 'บี', pin: '2222' },
-  { sid: '-DemoStaffC03', nickname: 'ซี', pin: '3333' }
+  { sid: '-DemoStaffA01', nickname: 'เอ', username: 'nong_a', password: '111111', uid: 'demoUidNongA00000000000000000', bound: false },
+  { sid: '-DemoStaffB02', nickname: 'บี', username: 'nong_b', password: '222222', uid: 'demoUidNongB00000000000000000', bound: true },
+  { sid: '-DemoStaffC03', nickname: 'ซี', username: 'nong_c', password: '333333', uid: 'demoUidNongC00000000000000000', bound: false, active: false }
 ];
+export const DEMO_NEWBIE = { username: 'newbie', nickname: 'ใหม่', password: 'newbie1', uid: 'demoUidNewbie000000000000000000' };
+const DEMO_KEY_B = 'DemoKeyOfStaffB' + 'x'.repeat(28), DEMO_DID_B = 'did_demo_staff_b_0001';   // กุญแจเครื่องของ บี (k 43 ตัว, did 21 ตัว)
 export const DEMO_SHOP = { lat: 17.318062, lng: 99.832187 };
 
 /* ---------- SHA-256 (sync) ให้ได้ค่าเดียวกับ crypto.subtle ใช้ seed PIN และเป็นตัวสำรองเมื่อหน้าไม่ใช่ https ---------- */
@@ -54,13 +59,23 @@ function seed() {
     admins: { [DEMO_ADMIN.uid]: true },
     settings: { lateGraceMin: 5 },
     branches: { wongwian: { name: 'สาขาวงเวียน', lat: DEMO_SHOP.lat, lng: DEMO_SHOP.lng, ...base }, klongyang: { name: 'สาขาแยกคลองยาง', ...base } },
-    staff: {}, staffSecret: {}
+    staff: {}, accounts: {}, deviceKeys: {}, deviceRequests: {}
   };
-  for (const s of DEMO_STAFF) {
-    att.staff[s.sid] = { nickname: s.nickname, branchId: 'wongwian', shiftStart: '07:00', shiftEnd: '18:00', active: true, createdAt: now };
-    att.staffSecret[s.sid] = { pinHash: sha256Hex(s.sid + s.pin) };
+  const users = { [DEMO_ADMIN.email]: { uid: DEMO_ADMIN.uid, password: DEMO_ADMIN.password } };
+  for (const st of DEMO_STAFF) {
+    att.staff[st.sid] = { nickname: st.nickname, username: st.username, branchId: 'wongwian', shiftStart: '07:00', shiftEnd: '18:00', active: st.active !== false, uid: st.uid, createdAt: now };
+    att.accounts[st.uid] = st.sid;
+    users[st.username + DEMO_DOMAIN] = { uid: st.uid, password: st.password };
+    if (st.bound) {
+      att.staff[st.sid].deviceId = DEMO_DID_B; att.staff[st.sid].deviceAt = now;
+      att.deviceKeys[st.sid] = { k: DEMO_KEY_B, did: DEMO_DID_B, at: now };
+      try { localStorage.setItem('clockdemo.ls.clock.dev', JSON.stringify({ did: DEMO_DID_B, k: DEMO_KEY_B })); } catch (_) { }   // เบราว์เซอร์นี้ = มือถือของ บี
+    }
   }
-  return { attendance: att, __users: { [DEMO_ADMIN.email]: { uid: DEMO_ADMIN.uid, password: DEMO_ADMIN.password } } };
+  // คำขอสมัครค้างอยู่ 1 รายการ (ให้เจ้าของลองอนุมัติ + เลือกสาขา/กะ)
+  users[DEMO_NEWBIE.username + DEMO_DOMAIN] = { uid: DEMO_NEWBIE.uid, password: DEMO_NEWBIE.password };
+  att.deviceRequests[DEMO_NEWBIE.uid] = { info: { kind: 'register', did: 'did_demo_newbie_0001', status: 'pending', requestedAt: now, username: DEMO_NEWBIE.username, nickname: DEMO_NEWBIE.nickname, userAgent: 'Mozilla/5.0 (Linux; Android 14) Chrome/120 Mobile Safari/537.36', standalone: false }, key: 'DemoKeyOfNewbie' + 'y'.repeat(28) };
+  return { attendance: att, __users: users };
 }
 function load() {
   let raw = localStorage.getItem(KEY);
@@ -208,15 +223,18 @@ export const getDatabase = (app) => ({ app, _t: 'db' });
 export const connectDatabaseEmulator = () => { };
 export const connectAuthEmulator = () => { };
 
-/* ---------- auth (แยกตามชื่อแอป: แอปลงเวลา = anonymous ติดเครื่อง, master = อีเมล/รหัสผ่านต่อแท็บ) ---------- */
+/* ---------- auth (แยกตามชื่อแอป: แอปลงเวลา = บัญชีพนักงานติดเครื่อง, master = อีเมล/รหัสผ่านต่อแท็บ, provision = ในหน่วยความจำ) ---------- */
 export const indexedDBLocalPersistence = { type: 'LOCAL' };
 export const browserSessionPersistence = { type: 'SESSION' };
+export const inMemoryPersistence = { type: 'NONE' };
 const auths = new Map();
 export function getAuth(app) {
   const name = (app && app.name) || '[DEFAULT]';
   if (auths.has(name)) return auths.get(name);
+  const mem = new Map();
+  const memStore = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v), removeItem: (k) => mem.delete(k) };
   const a = { app, _name: name, _persist: indexedDBLocalPersistence, _subs: new Set(), _user: undefined };
-  const store = () => (a._persist === browserSessionPersistence ? sessionStorage : localStorage);
+  const store = () => (a._persist === browserSessionPersistence ? sessionStorage : a._persist === inMemoryPersistence ? memStore : localStorage);
   const skey = 'clockdemo.auth.' + name;
   Object.defineProperty(a, 'currentUser', {
     get() {
@@ -232,8 +250,10 @@ export function getAuth(app) {
   auths.set(name, a);
   return a;
 }
+export function initializeAuth(app, opts) { const a = getAuth(app); if (opts && opts.persistence) { a._persist = opts.persistence; a._user = undefined; } return a; }
 export const setPersistence = (a, p) => { a._persist = p; a._user = undefined; return Promise.resolve(); };
 export function onAuthStateChanged(a, cb) { a._subs.add(cb); setTimeout(() => { if (a._subs.has(cb)) cb(a.currentUser); }, 0); return () => a._subs.delete(cb); }
+const authErr = (code) => { const e = new Error(code); e.code = code; return e; };
 export function signInAnonymously(a) {
   let uid = localStorage.getItem('clockdemo.anonuid.' + a._name);
   if (!uid) { uid = 'anon' + pushId().replace(/[^A-Za-z0-9]/g, '') + Math.random().toString(36).slice(2, 8); localStorage.setItem('clockdemo.anonuid.' + a._name, uid); }
@@ -241,12 +261,39 @@ export function signInAnonymously(a) {
   a._set(u); return Promise.resolve({ user: u });
 }
 export function signInWithEmailAndPassword(a, email, password) {
-  const rec = (load().__users || {})[String(email).trim().toLowerCase()];
-  if (!rec || rec.password !== password) { const e = new Error('invalid credential'); e.code = 'auth/invalid-credential'; return Promise.reject(e); }
-  const u = { uid: rec.uid, isAnonymous: false, email: String(email).trim().toLowerCase() };
+  const em = String(email).trim().toLowerCase();
+  const rec = (load().__users || {})[em];
+  if (!rec || rec.password !== password) return Promise.reject(authErr('auth/invalid-credential'));
+  const u = { uid: rec.uid, isAnonymous: false, email: em };
   a._set(u); return Promise.resolve({ user: u });
 }
+export function createUserWithEmailAndPassword(a, email, password) {
+  const em = String(email).trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return Promise.reject(authErr('auth/invalid-email'));
+  if (String(password).length < 6) return Promise.reject(authErr('auth/weak-password'));
+  const db = load();
+  if ((db.__users || {})[em]) return Promise.reject(authErr('auth/email-already-in-use'));
+  const uid = Array.from({ length: 28 }, () => CHARS.charAt(Math.floor(Math.random() * 62) + 2)).join('');
+  db.__users = db.__users || {}; db.__users[em] = { uid, password };
+  save(db);
+  const u = { uid, isAnonymous: false, email: em };
+  a._set(u); return Promise.resolve({ user: u });
+}
+export function deleteUser(user) {
+  const db = load();
+  for (const [em, rec] of Object.entries(db.__users || {})) if (rec.uid === user.uid) delete db.__users[em];
+  save(db);
+  for (const a of auths.values()) if (a.currentUser && a.currentUser.uid === user.uid) a._set(null);
+  return Promise.resolve();
+}
 export const signOut = (a) => { a._set(null); return Promise.resolve(); };
+
+/** จำลองมือถือเครื่องใหม่: ลืมกุญแจเครื่อง + ออกจากระบบของแอปลงเวลา (ใช้สาธิต "ขอใช้เครื่องนี้" / เครื่องถูกแทน / ลืมรหัส) */
+export function demoNewPhone() {
+  for (const k of ['clock.dev', 'clock.devPending', 'clock.last', 'clock.draft']) localStorage.removeItem('clockdemo.ls.' + k);   // เฉพาะคีย์เดโม (คำนำหน้า clockdemo.ls.) ไม่แตะ clock.dev ของจริง
+  for (const k of Object.keys(localStorage)) if (k.startsWith('clockdemo.ls.clock.hist.')) localStorage.removeItem(k);
+  localStorage.removeItem('clockdemo.auth.[DEFAULT]');
+}
 
 /** ล้างข้อมูลเดโมทั้งหมด (ใช้จาก demo.html) */
 export function resetDemo() {
@@ -298,6 +345,10 @@ export function mountBanner(kind, onGps) {
       btns.push([m, b]); row.append(b);
     }
     paint(); bar.append(row);
+    const np = el('button', 'border:0;border-radius:8px;padding:8px 10px;font:700 14px system-ui,sans-serif;min-height:40px;cursor:pointer;margin-top:6px;background:#fff;color:#9a3412', 'จำลองมือถือเครื่องใหม่');
+    np.type = 'button'; np.id = 'demoNewPhone';
+    np.addEventListener('click', () => { demoNewPhone(); location.reload(); });
+    bar.append(np);
   }
   const a = el('a', 'color:#fff;margin-left:8px;text-decoration:underline', 'หน้าเดโม');
   a.href = './demo.html'; bar.firstChild.append(a);

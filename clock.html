@@ -58,6 +58,12 @@ button{font:inherit;border:0;cursor:pointer;touch-action:manipulation}
 #cf{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;display:flex;align-items:flex-end;justify-content:center}
 #cf .box{background:#fff;border-radius:22px 22px 0 0;padding:22px;width:100%;max-width:520px}
 .hidden{display:none!important}
+/* สมัคร/เข้าสู่ระบบ (Auth v2) */
+.flabel{display:block;font-size:19px;font-weight:600;margin:10px 0 2px}
+.fld{font:inherit;font-size:22px;padding:12px;border:3px solid #9ca3af;border-radius:12px;width:100%;margin-top:4px}
+.tabs2{display:flex;gap:8px;margin:6px 0 8px}
+.tabs2 button{flex:1;background:#e5e7eb;color:#111827;border-radius:14px;font-size:22px;font-weight:700;min-height:56px}
+.tabs2 button.on{background:#16a34a;color:#fff}
 /* แจ้งแก้เวลา (หน้า D) */
 .back{background:#e5e7eb;color:#111827;border-radius:14px;padding:12px 18px;font-size:22px;font-weight:700;min-height:56px;margin-bottom:8px}
 .dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:#dc2626;margin-left:6px;vertical-align:middle}
@@ -83,7 +89,7 @@ textarea.rt{font:inherit;font-size:21px;width:100%;min-height:80px;padding:10px;
 // โหมดเดโม (?demo=1): ใช้ฐานข้อมูลจำลองในเครื่องแทน Firebase ดู demo.html ถ้าไม่มี ?demo=1 โค้ดเดโมไม่ถูกโหลดและใช้ Firebase SDK ตามเดิม
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 const FBM = DEMO ? await import('./demo/firebase-demo.mjs') : null;
-const [{ initializeApp }, { getAuth, setPersistence, indexedDBLocalPersistence, signInAnonymously, onAuthStateChanged, connectAuthEmulator }, { getDatabase, ref, onValue, get, set, remove, update, push, serverTimestamp, connectDatabaseEmulator, query, orderByChild, equalTo }] = FBM ? [FBM, FBM, FBM] : await Promise.all([
+const [{ initializeApp }, { getAuth, setPersistence, indexedDBLocalPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, deleteUser, signOut, onAuthStateChanged, connectAuthEmulator }, { getDatabase, ref, onValue, get, set, remove, update, push, serverTimestamp, connectDatabaseEmulator, query, orderByChild, equalTo }] = FBM ? [FBM, FBM, FBM] : await Promise.all([
   import('https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js'),
   import('https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js'),
   import('https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js')
@@ -99,6 +105,13 @@ const FIREBASE_CONFIG = {
 };
 
 const EMU = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).get('emu') === '1';
+// ค่าคงที่ของระบบบัญชีพนักงาน (ต้องตรงกันทุกตัวอักษรกับ clock-master.html และ database.rules.json) ดู docs/plan-auth-v2.md ข้อ 2.1
+const STAFF_EMAIL_DOMAIN = '@staff.ngluckseng.invalid';
+const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
+const PW_MIN = 6;
+const normUser = (s) => String(s || '').trim().toLowerCase();
+const staffEmail = (u) => normUser(u) + STAFF_EMAIL_DOMAIN;
+const EMU_CFG = { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' };
 const CONFIG_MISSING = !EMU && !DEMO && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
 
 const $root = document.getElementById('root');
@@ -235,7 +248,7 @@ if ((!window.isSecureContext && !DEMO) || !('geolocation' in navigator)) {
 }
 
 /* ====== Firebase ====== */
-const app = initializeApp(DEMO ? { demo: true } : EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG);
+const app = initializeApp(DEMO ? { demo: true } : EMU ? EMU_CFG : FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db = getDatabase(app);
 if (EMU) { connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true }); connectDatabaseEmulator(db, '127.0.0.1', 9000); }
@@ -256,23 +269,28 @@ const COOLDOWN_MS = 30000;
 function fmtClock(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
 function fmtMin(m) { m = Math.max(0, Math.round(m)); const hh = Math.floor(m / 60), mm = m % 60; return hh ? `${hh} ชม. ${String(mm).padStart(2, '0')} น.` : `${mm} นาที`; }
 const fmtDist = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)} กม.` : `${Math.round(m)} ม.`);
-async function sha256Hex(text) {
-  if (DEMO && !(window.crypto && crypto.subtle)) return FBM.sha256Hex(text);   // เดโมบนหน้า http
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
 const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-/* ====== ข้อมูลสด ====== */
-const D = { staff: null, branches: null, settings: null, state: undefined, logs: null, req: undefined, corr: null };
+/* ====== ข้อมูลสด (Auth v2: บัญชี = accounts/{uid}, เครื่อง = กุญแจใน localStorage) ====== */
+const D = { acct: undefined, staff: undefined, info: undefined, branches: null, settings: null, state: undefined, logs: null, corr: null };
 let user = null;
+let authReady = false, authBusy = false;
 let connected = true;
-let me = null;            // { sid, s }
-let unsubs = [];
+let acct = null;          // { sid, s } บัญชีที่ล็อกอินอยู่ (อาจยังไม่ได้ผูกเครื่องนี้)
+let me = null;            // = acct เมื่อผูกเครื่องนี้แล้ว (ใช้หน้าหลัก/ประวัติ/แจ้งแก้เวลาได้)
+let unsubs = [], staffUnsub = null, restUnsubs = [], curSid = null;
 let stateUnsub = null, logsUnsub = null, logsKey = '', corrUnsub = null;
-const getLast = () => { try { return JSON.parse(localStorage.getItem('clock.last') || 'null'); } catch (_) { return null; } };
+const lsJson = (k) => { try { const o = JSON.parse(localStorage.getItem(k) || 'null'); return o && typeof o === 'object' ? o : null; } catch (_) { return null; } };
+const getLast = () => lsJson('clock.last');
+const myDev = () => { const o = lsJson('clock.dev'); return o && o.did && o.k ? o : null; };
+const myPend = () => { const o = lsJson('clock.devPending'); return o && o.did && o.k ? o : null; };
+const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+/** กุญแจเครื่อง: k = 256 บิตลับ (43 ตัว) did = รหัสเครื่องสาธารณะ (20 ตัว) */
+const newDevPair = () => ({ did: b64url(crypto.getRandomValues(new Uint8Array(15))), k: b64url(crypto.getRandomValues(new Uint8Array(32))) });
+const proofOf = (sid) => ({ [`devproof/${sid}/${myDev().k}`]: serverTimestamp() });
+const usernameOf = (u) => String(u && u.email || '').slice(0, -STAFF_EMAIL_DOMAIN.length);
+const isStaffUser = (u) => !!u && !u.isAnonymous && String(u.email || '').toLowerCase().endsWith(STAFF_EMAIL_DOMAIN);
 
-let reg = { step: null, sid: null, pin: '', err: '' };   // ขั้นตอนลงทะเบียน
 let busy = null;           // null | 'locating' | 'saving' | 'slow'
 let refusal = null;        // { title, text, retry }
 let cooldownShown = false;
@@ -284,27 +302,63 @@ let watchId = null;
 function attachUser() {
   unsubs.push(onValue(ref(db, '.info/connected'), (s) => { connected = s.val() === true; render(); }));
   unsubs.push(onValue(ref(db, '.info/serverTimeOffset'), (s) => { serverOffset = s.val() || 0; }));
-  unsubs.push(onValue(A('staff'), (s) => { D.staff = s.val() || {}; onStaff(); }, onListenErr));
-  unsubs.push(onValue(A('branches'), (s) => { D.branches = s.val() || {}; render(); }, onListenErr));
-  unsubs.push(onValue(A('settings'), (s) => { D.settings = s.val() || {}; }, onListenErr));
-  unsubs.push(onValue(A('deviceRequests/' + user.uid), (s) => { D.req = s.val(); render(); }, () => { D.req = null; render(); }));
+  unsubs.push(onValue(A('accounts/' + user.uid), (s) => { const v = s.val(); D.acct = typeof v === 'string' ? v : null; onAcct(); }, () => { D.acct = null; onAcct(); }));
+  unsubs.push(onValue(A('deviceRequests/' + user.uid + '/info'), (s) => { D.info = s.val(); render(); }, () => { D.info = null; render(); }));
 }
 function onListenErr(e) { console.warn('listen error', e?.code); }
-
-function onStaff() {
-  const found = Object.entries(D.staff || {}).find(([, s]) => s && s.uid === user.uid && s.deviceApproved === true);
+function stopMeListeners() {
+  if (corrUnsub) corrUnsub(); corrUnsub = null; D.corr = null; corrView = null;
+  if (stateUnsub) stateUnsub(); stateUnsub = null; D.state = undefined;
+  if (logsUnsub) logsUnsub(); logsUnsub = null; logsKey = ''; D.logs = null;
+}
+function detachStaff() {
+  if (staffUnsub) staffUnsub(); staffUnsub = null;
+  restUnsubs.forEach((u) => u()); restUnsubs = [];
+  stopMeListeners();
+  D.staff = undefined; D.branches = null; D.settings = null; acct = null; me = null; curSid = null;
+}
+function teardownUser() {
+  unsubs.forEach((u) => u()); unsubs = [];
+  const prevSid = curSid;
+  detachStaff();
+  if (prevSid) histClear(prevSid);
+  histView = false; corr = null;
+  D.acct = undefined; D.info = undefined;
+  user = null;
+}
+function onAcct() {
+  if (D.acct === curSid) { render(); return; }
+  if (curSid) { const prev = curSid; detachStaff(); if (D.acct !== prev) histClear(prev); }
+  curSid = D.acct;
+  if (curSid) {
+    D.staff = undefined;
+    staffUnsub = onValue(A('staff/' + curSid), (s) => { D.staff = s.val() || null; onStaffRec(); }, () => { D.staff = null; onStaffRec(); });
+    restUnsubs.push(onValue(A('branches'), (s) => { D.branches = s.val() || {}; render(); }, onListenErr));
+    restUnsubs.push(onValue(A('settings'), (s) => { D.settings = s.val() || {}; render(); }, onListenErr));
+  }
+  render();
+}
+function onStaffRec() {
+  const s = D.staff;
+  acct = s && curSid ? { sid: curSid, s } : null;
+  // กุญแจที่รออนุมัติกลายเป็นกุญแจที่ใช้งานเมื่อเจ้าของอนุมัติ (staff.deviceId ตรงกับ did ที่ส่งไป)
+  const pend = myPend();
+  if (acct && pend && acct.s.deviceId === pend.did) {
+    try { localStorage.setItem('clock.dev', JSON.stringify({ did: pend.did, k: pend.k })); localStorage.removeItem('clock.devPending'); } catch (_) { }
+  }
+  const dev = myDev();
+  const ok = !!(acct && acct.s.deviceId && dev && acct.s.deviceId === dev.did);
   const prev = me?.sid;
-  me = found ? { sid: found[0], s: found[1] } : null;
+  me = ok ? acct : null;
   if (me && me.sid !== prev) {
-    reg = { step: null, sid: null, pin: '', err: '' };
     if (stateUnsub) stateUnsub();
-    stateUnsub = onValue(A('state/' + me.sid), (s) => { D.state = s.val(); syncLogs(); render(); }, onListenErr);
+    stateUnsub = onValue(A('state/' + me.sid), (s2) => { D.state = s2.val(); syncLogs(); render(); }, onListenErr);
     if (corrUnsub) corrUnsub();
     D.corr = null;
-    corrUnsub = onValue(query(A('corrections'), orderByChild('staffId'), equalTo(me.sid)), (s) => { D.corr = s.val() || {}; render(); if (histView) histCorrRefresh(); }, onListenErr);
+    corrUnsub = onValue(query(A('corrections'), orderByChild('staffId'), equalTo(me.sid)), (s2) => { D.corr = s2.val() || {}; render(); if (histView) histCorrRefresh(); }, onListenErr);
   }
-  if (!me && prev) { histClear(prev); if (corrUnsub) corrUnsub(); corrUnsub = null; D.corr = null; corrView = null; if (stateUnsub) stateUnsub(); stateUnsub = null; D.state = undefined; if (logsUnsub) logsUnsub(); logsUnsub = null; logsKey = ''; D.logs = null; }
-  if (me) { try { localStorage.setItem('clock.last', JSON.stringify({ sid: me.sid, nickname: me.s.nickname })); } catch (_) { } }
+  if (!me && prev) { histClear(prev); stopMeListeners(); }
+  if (me) { try { localStorage.setItem('clock.last', JSON.stringify({ uid: user.uid, sid: me.sid, nickname: me.s.nickname, did: dev.did })); } catch (_) { } }
   render();
 }
 function timelineDate() {
@@ -473,7 +527,7 @@ async function save(type, fix, ev) {
   busy = 'saving'; render();
   const slow = setTimeout(() => { if (busy === 'saving') { busy = 'slow'; render(); } }, 8000);
   try {
-    await update(A(''), { [logPath]: log, [`state/${sid}`]: stateNew });
+    await update(A(''), { [logPath]: log, [`state/${sid}`]: stateNew, ...proofOf(sid) });   // proof = กุญแจเครื่องที่เจ้าของอนุมัติ (rules ตรวจ)
     clearTimeout(slow);
     let ts = serverNow();
     try { const snap = await Promise.race([get(A(logPath)), sleep(1000).then(() => null)]); if (snap && snap.val()?.ts) ts = snap.val().ts; } catch (_) { }
@@ -505,25 +559,103 @@ function confirmOut() {
   });
 }
 
-/* ====== ลงทะเบียน ====== */
-async function submitRegistration() {
-  reg.step = 'submitting'; reg.err = ''; render();
+/* ====== สมัคร / เข้าสู่ระบบ / ขอใช้เครื่อง (Auth v2) ====== */
+const authErrMsg = (e) => ({
+  'auth/email-already-in-use': "ชื่อผู้ใช้นี้มีคนใช้แล้ว — ลองชื่ออื่น ถ้าเป็นของคุณให้กด 'เข้าสู่ระบบ'",
+  'auth/weak-password': 'รหัสผ่านต้องมีอย่างน้อย ' + PW_MIN + ' ตัว',
+  'auth/password-does-not-meet-requirements': 'รหัสผ่านต้องมีอย่างน้อย ' + PW_MIN + ' ตัว',
+  'auth/invalid-credential': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
+  'auth/wrong-password': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
+  'auth/user-not-found': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
+  'auth/invalid-email': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
+  'auth/too-many-requests': 'ลองหลายครั้งเกินไป รอสักครู่แล้วลองใหม่',
+  'auth/network-request-failed': 'ไม่มีอินเทอร์เน็ต — ต่อเน็ตแล้วลองใหม่',
+  'auth/operation-not-allowed': 'ร้านยังไม่เปิดให้สมัคร — แจ้งเจ้าของร้าน',
+  'auth/admin-restricted-operation': 'ร้านยังไม่เปิดให้สมัคร — แจ้งเจ้าของร้าน',
+  'auth/user-disabled': 'บัญชีนี้ถูกปิด — แจ้งเจ้าของร้าน',
+  'auth/user-token-expired': 'กรุณาเข้าสู่ระบบอีกครั้ง (ถ้าไม่ได้เปลี่ยนรหัสผ่านเอง ให้แจ้งเจ้าของ)'
+}[e && e.code] || 'ไม่สำเร็จ ลองใหม่อีกครั้ง');
+
+let af = { tab: 'login', step: null, err: '', busy: false, u: '', pw: '', pw2: '', nick: '', relink: false, old: '', show: false };
+const afReset = (tab) => { af = { tab: tab || 'login', step: null, err: '', busy: false, u: af.u, pw: '', pw2: '', nick: af.nick, relink: tab === 'forgot', old: '', show: af.show }; };
+
+/** เขียนคำขอของ uid นี้ (สมัคร/ขอใช้เครื่อง) พร้อมกุญแจเครื่องใหม่ที่ยังไม่ใช้งานจนกว่าเจ้าของอนุมัติ */
+async function writeRequest(kind, extra) {
+  const cu = auth.currentUser; if (!cu) throw new Error('no user');
+  const dev = newDevPair();
+  localStorage.setItem('clock.devPending', JSON.stringify({ did: dev.did, k: dev.k, uid: cu.uid }));
+  const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  const info = { kind, did: dev.did, status: 'pending', requestedAt: serverTimestamp(), userAgent: navigator.userAgent.slice(0, 300), standalone: !!standalone, ...extra };
+  if (D.info) { try { await remove(A('deviceRequests/' + cu.uid)); } catch (_) { } }
+  await withTimeout(set(A('deviceRequests/' + cu.uid), { info, key: dev.k }), 8000);
+}
+async function doLogin() {
+  const un = normUser(af.u);
+  if (!USERNAME_RE.test(un) || !af.pw) { af.err = 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'; render(); return; }
+  af.busy = true; af.err = ''; render();
+  try { await signInWithEmailAndPassword(auth, staffEmail(un), af.pw); af.pw = ''; }
+  catch (e) { af.err = authErrMsg(e); }
+  af.busy = false; render();
+}
+function checkSignup() {
+  const un = normUser(af.u);
+  if (!USERNAME_RE.test(un)) return 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z, 0-9 และ _ ยาว 3-20 ตัว (ไม่ใช้ภาษาไทย/ช่องว่าง)';
+  const nick = af.nick.trim();
+  if (!nick || nick.length > 20) return 'ใส่ชื่อเล่น (ไม่เกิน 20 ตัว)';
+  if (af.pw.length < PW_MIN) return 'รหัสผ่านต้องมีอย่างน้อย ' + PW_MIN + ' ตัว';
+  if (af.pw !== af.pw2) return 'รหัสผ่านสองช่องไม่ตรงกัน';
+  if (af.old && !USERNAME_RE.test(normUser(af.old))) return 'ชื่อผู้ใช้เดิมไม่ถูกต้อง (เว้นว่างได้ถ้าจำไม่ได้)';
+  return '';
+}
+function startSignup() { const bad = checkSignup(); if (bad) { af.err = bad; render(); return; } af.err = ''; af.step = 'loc'; render(); }
+async function doSignup() {
+  const un = normUser(af.u), nick = af.nick.trim();
+  authBusy = true; af.busy = true; af.err = ''; render();
+  let cred;
+  try { cred = await createUserWithEmailAndPassword(auth, staffEmail(un), af.pw); }
+  catch (e) { authBusy = false; af.busy = false; af.step = null; af.err = authErrMsg(e); render(); return; }
+  const extra = { username: un, nickname: nick };
+  if (af.relink) { extra.relink = true; if (af.old) extra.oldUsername = normUser(af.old); }
   try {
-    const pinHash = await sha256Hex(reg.sid + reg.pin);
-    await set(A('deviceRequests/' + user.uid), { staffId: reg.sid, pinHash, requestedAt: serverTimestamp(), status: 'pending', userAgent: navigator.userAgent.slice(0, 300) });
-    reg.step = null; reg.pin = '';
+    await writeRequest('register', extra);
+    authBusy = false; af.busy = false; af.pw = af.pw2 = ''; af.step = null; render();
   } catch (e) {
-    reg.step = 'pick'; reg.pin = '';
-    reg.err = 'ส่งคำขอไม่สำเร็จ — ตรวจว่าเน็ตใช้ได้ แล้วลองใหม่ ถ้ายังไม่ได้ให้แจ้งเจ้าของ';
+    if (e && e.code === 'PERMISSION_DENIED') {
+      try { await deleteUser(cred.user); } catch (_) { }          // ไม่ให้เหลือบัญชีกำพร้าตอนร้านปิดรับสมัคร
+      authBusy = false; af.busy = false; af.step = null; af.err = 'ร้านปิดรับสมัครชั่วคราว — แจ้งเจ้าของร้าน'; render(); return;
+    }
+    try { localStorage.setItem('clock.draft', JSON.stringify({ nickname: nick, relink: !!af.relink, oldUsername: af.old || '' })); } catch (_) { }
+    authBusy = false; af.busy = false; af.step = null; render();   // ไป NEED_REQUEST ส่งใหม่เมื่อมีเน็ต
   }
-  render();
 }
-async function reRegister() {
-  try { localStorage.removeItem('clock.last'); } catch (_) { }
-  try { await remove(A('deviceRequests/' + user.uid)); } catch (_) { }
-  reg = { step: 'pick', sid: null, pin: '', err: '' };
-  render();
+async function sendNeedRequest() {
+  const nick = af.nick.trim(), dr = lsJson('clock.draft') || {};
+  if (!nick || nick.length > 20) { af.err = 'ใส่ชื่อเล่น (ไม่เกิน 20 ตัว)'; render(); return; }
+  af.busy = true; af.err = ''; render();
+  const extra = { username: usernameOf(auth.currentUser), nickname: nick };
+  if (dr.relink) { extra.relink = true; if (dr.oldUsername) extra.oldUsername = dr.oldUsername; }
+  try { await writeRequest('register', extra); try { localStorage.removeItem('clock.draft'); } catch (_) { } }
+  catch (e) { af.err = e && e.code === 'PERMISSION_DENIED' ? 'ร้านปิดรับสมัครชั่วคราว — แจ้งเจ้าของร้าน' : 'ส่งไม่สำเร็จ — ตรวจเน็ตแล้วลองใหม่'; }
+  af.busy = false; render();
 }
+async function sendDeviceRequest() {
+  af.busy = true; af.err = ''; render();
+  try { await writeRequest('device', {}); }
+  catch (e) { af.err = 'ส่งคำขอไม่สำเร็จ — ถ้ามีคำขอค้างอยู่ให้รอเจ้าของ หรือแจ้งเจ้าของ'; }
+  af.busy = false; render();
+}
+async function doSignOut() { try { await signOut(auth); } catch (_) { } }
+function confirmSheet(title, okLabel) {
+  return new Promise((res) => {
+    const close = (v) => { box.remove(); res(v); };
+    const box = h('div', { id: 'cf' }, h('div', { class: 'box' },
+      h('div', { style: 'font-size:26px;font-weight:800;margin-bottom:6px' }, title),
+      h('button', { class: 'btn red', id: 'cfYes', onclick: () => close(true) }, okLabel),
+      h('button', { class: 'btn gray', onclick: () => close(false) }, 'ยกเลิก')));
+    document.body.append(box);
+  });
+}
+const logoutBtn = () => h('button', { class: 'btn link', id: 'logoutBtn', onclick: doSignOut }, 'ออกจากระบบ');
 
 /* ====== แจ้งแก้เวลา (หน้า D) ====== */
 const CORR_TYPES = { in: 'ลืมกดเข้างาน', out: 'ลืมกดออกงาน', break: 'ลืมกดพัก', break_end: 'ลืมกดกลับจากพัก' };
@@ -605,7 +737,8 @@ async function submitCorr() {
   if (c.nextDay) body.nextDay = true;
   if (c.type === 'break' && c.endNextDay) body.endNextDay = true;
   c.sending = true; c.err = ''; render();
-  const p = set(push(A('corrections')), body);
+  const cid = push(A('corrections')).key;
+  const p = update(A(''), { [`corrections/${cid}`]: body, ...proofOf(me.sid) });
   const offline = !connected;
   let failed = false;
   p.catch(() => { failed = true; if (corr === c) { c.sending = false; c.err = 'ส่งไม่สำเร็จ — ลองใหม่ ถ้ายังไม่ได้ให้แจ้งเจ้าของ'; render(); } });
@@ -628,7 +761,7 @@ async function cancelCorr(id) {
     document.body.append(box);
   });
   if (!ok) return;
-  try { await remove(A('corrections/' + id)); } catch (_) { refusal = { title: 'ยกเลิกไม่สำเร็จ', text: 'ลองใหม่อีกครั้ง' }; }
+  try { await update(A(''), { ['corrections/' + id]: null, ...proofOf(me.sid) }); } catch (_) { refusal = { title: 'ยกเลิกไม่สำเร็จ', text: 'ลองใหม่อีกครั้ง' }; }
   render();
 }
 
@@ -817,6 +950,7 @@ function buildHist() {
     $root.append(h('div', { class: 'card hday', 'data-d': d }, ...rows));
   }
   if (hist.savedAt) $root.append(h('div', { class: 'small', style: 'margin-top:8px' }, `อัปเดตเมื่อ ${fmtTime(hist.savedAt)}`));
+  $root.append(h('button', { class: 'btn link', id: 'logoutLink', style: 'font-size:15px;color:#6b7280', onclick: async () => { if (await confirmSheet('ออกจากระบบใช่ไหม', 'ใช่ ออกจากระบบ')) doSignOut(); } }, 'ออกจากระบบ'));
 }
 
 /* ====== วาดหน้าจอ ====== */
@@ -824,23 +958,35 @@ let lastKey = '';
 let ui = {};
 
 function currentView() {
-  if (!user || !D.staff || !D.branches || D.req === undefined) return 'LOADING';
+  if (!authReady) return 'LOADING';
+  if (!user) {
+    if (isIOS && navigator.standalone !== true && !sessionStorage.getItem('clock.skipInstall')) return 'INSTALL';
+    return 'AUTH';
+  }
+  if (!isStaffUser(user)) return 'NOT_STAFF';
+  if (authBusy) return 'SUBMITTING';
+  if (D.acct === undefined || D.info === undefined) return 'LOADING';
+  if (!D.acct) {
+    const last = getLast();
+    if (last && last.uid === user.uid && last.sid) return 'ACCOUNT_MOVED';
+    if (!D.info) return 'NEED_REQUEST';
+    return D.info.status === 'rejected' ? 'REJECTED_ACCOUNT' : 'WAIT_ACCOUNT';
+  }
+  if (D.staff === undefined || !D.branches || !D.settings) return 'LOADING';
+  if (!acct) return 'ACCOUNT_MOVED';
+  if (acct.s.active === false) return 'DISABLED';
   if (me) {
-    if (me.s.active === false) return 'DISABLED';
     if (D.state === undefined) return 'LOADING_MAIN';
     if (histView) return 'HIST';
     if (corrView === 'LIST') return 'CORR_LIST';
     if (corrView === 'NEW' && corr) return 'CORR_NEW';
     return 'MAIN';
   }
-  if (reg.step === 'submitting') return 'SUBMITTING';
-  if (reg.step === 'pin') return 'PIN';
-  if (reg.step === 'loc') return 'LOC';
-  if (reg.step === 'pick') return 'PICK';
-  if (D.req) return D.req.status === 'rejected' ? 'REJECTED' : 'WAITING';
-  const last = getLast(); if (last && last.sid) return 'REVOKED';
-  if (isIOS && navigator.standalone !== true && !sessionStorage.getItem('clock.skipInstall')) return 'INSTALL';
-  return 'PICK';
+  const pend = myPend(), dev = myDev(), last = getLast(), info = D.info;
+  if (info && info.kind === 'device' && info.status === 'pending' && pend && info.did === pend.did) return 'WAIT_DEVICE';
+  if (info && info.kind === 'device' && info.status === 'rejected' && pend && info.did === pend.did) return 'REJECTED_DEVICE';
+  if (dev && last && last.uid === user.uid && last.did === dev.did) return 'REPLACED';
+  return 'NEW_DEVICE';
 }
 
 function viewKey(v) {
@@ -848,9 +994,10 @@ function viewKey(v) {
   if (v === 'HIST') return 'HIST|' + histVersion + '|' + Object.entries(D.corr || {}).map(([k, c]) => k + (c && c.status)).join() + '|' + Object.keys(D.logs || {}).length + ((D.state || {}).lastLogId || '') + '|' + (connected ? '' : 'off');
   if (v === 'CORR_LIST') return 'CORR_LIST|' + Object.entries(D.corr || {}).map(([k, c]) => k + (c && c.status)).join();
   if (v === 'CORR_NEW') return 'CORR_NEW|' + corr.step + '|' + (corr.sending ? 's' : '') + corr.err + '|' + (connected ? '' : 'off');
-  if (v === 'PIN') return 'PIN' + reg.sid + reg.pin.length + reg.err;
-  if (v === 'PICK') return 'PICK' + reg.err + Object.keys(D.staff || {}).join();
-  if (v === 'WAITING') return 'WAITING' + (D.req ? D.req.staffId : '');
+  if (v === 'AUTH') return ['AUTH', af.tab, af.step, af.err, af.busy ? 'b' : '', af.show ? 's' : ''].join('|');
+  if (v === 'NEED_REQUEST') return ['NEED', af.err, af.busy ? 'b' : ''].join('|');
+  if (v === 'WAIT_ACCOUNT' || v === 'NEW_DEVICE' || v === 'REPLACED') return [v, af.err, af.busy ? 'b' : '', D.info ? D.info.did : '', (myPend() || {}).did || '', (acct && acct.s.deviceId) || ''].join('|');
+  if (v === 'REJECTED_ACCOUNT' || v === 'REJECTED_DEVICE') return [v, af.err, af.busy ? 'b' : ''].join('|');
   return v;
 }
 
@@ -865,20 +1012,34 @@ function build(v) {
   switch (v) {
     case 'LOADING': return buildLoading(false);
     case 'LOADING_MAIN': return buildLoading(true);
-    case 'DISABLED': return $root.append(card('บัญชีนี้ถูกปิดใช้งาน', h('div', null, 'ติดต่อเจ้าของร้าน')));
-    case 'INSTALL': return buildInstall();
-    case 'PICK': return buildPick();
-    case 'PIN': return buildPin();
-    case 'LOC': return buildLoc();
     case 'SUBMITTING': return $root.append(card('กำลังส่งคำขอ...'));
-    case 'WAITING': return $root.append(card('รอเจ้าของอนุมัติเครื่องนี้', h('div', null, 'เมื่ออนุมัติแล้วหน้านี้จะเปลี่ยนเอง')));
-    case 'REJECTED': return $root.append(card('เจ้าของยังไม่อนุมัติ', h('div', null, 'ตรวจว่าเลือกชื่อและใส่รหัสถูก แล้วลงทะเบียนใหม่'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
-    case 'REVOKED': return $root.append(card('เครื่องนี้ถูกยกเลิกการผูกแล้ว', h('div', null, 'ลงทะเบียนใหม่เพื่อใช้งานต่อ'), h('button', { class: 'btn', onclick: reRegister }, 'ลงทะเบียนใหม่')));
+    case 'INSTALL': return buildInstall();
+    case 'AUTH': return buildAuth();
+    case 'NOT_STAFF': return $root.append(card('บัญชีนี้ไม่ใช่บัญชีพนักงาน', h('div', null, 'ออกจากระบบแล้วเข้าสู่ระบบด้วยชื่อผู้ใช้พนักงาน')), logoutBtn());
+    case 'NEED_REQUEST': return buildNeedRequest();
+    case 'WAIT_ACCOUNT': return buildWaitAccount();
+    case 'REJECTED_ACCOUNT': return $root.append(card('เจ้าของไม่อนุมัติ', h('div', null, 'ถ้ายังไม่ถูกต้อง ส่งคำขอใหม่ หรือแจ้งเจ้าของ'), af.err && h('div', { class: 'err' }, af.err)),
+      h('button', { class: 'btn', id: 'reqAgain', disabled: af.busy, onclick: sendNeedRequestAfterReject }, 'ส่งคำขอใหม่'), logoutBtn());
+    case 'ACCOUNT_MOVED': return $root.append(card('บัญชีนี้ถูกเปลี่ยนแล้ว', h('div', null, 'เข้าสู่ระบบด้วยชื่อผู้ใช้ใหม่ที่เจ้าของแจ้ง')), logoutBtn());
+    case 'DISABLED': return $root.append(card('บัญชีนี้ถูกปิดใช้งาน', h('div', null, 'ติดต่อเจ้าของร้าน')), logoutBtn());
+    case 'NEW_DEVICE': return buildDeviceAsk(false);
+    case 'REPLACED': return buildDeviceAsk(true);
+    case 'WAIT_DEVICE': return $root.append(card('รอเจ้าของอนุมัติมือถือเครื่องนี้', h('div', null, 'เมื่ออนุมัติแล้วหน้านี้จะเปลี่ยนเอง')), logoutBtn());
+    case 'REJECTED_DEVICE': return $root.append(card('เจ้าของไม่อนุมัติเครื่องนี้', h('div', null, 'ถ้าเป็นมือถือของคุณ ขอใหม่ได้ หรือแจ้งเจ้าของ'), af.err && h('div', { class: 'err' }, af.err)),
+      h('button', { class: 'btn', id: 'reqDevice', disabled: af.busy, onclick: sendDeviceRequest }, 'ขอใหม่'), logoutBtn());
     case 'MAIN': return buildMain();
     case 'HIST': return buildHist();
     case 'CORR_LIST': return buildCorrList();
     case 'CORR_NEW': return buildCorrNew();
   }
+}
+async function sendNeedRequestAfterReject() {
+  af.nick = (D.info && D.info.nickname) || af.nick;
+  if (D.info && D.info.kind === 'device') return sendDeviceRequest();
+  af.busy = true; af.err = ''; render();
+  const extra = { username: usernameOf(auth.currentUser), nickname: af.nick || (D.info && D.info.nickname) || usernameOf(auth.currentUser).slice(0, 20) };
+  try { await writeRequest('register', extra); } catch (e) { af.err = e && e.code === 'PERMISSION_DENIED' ? 'ร้านปิดรับสมัครชั่วคราว — แจ้งเจ้าของร้าน' : 'ส่งไม่สำเร็จ — ตรวจเน็ตแล้วลองใหม่'; }
+  af.busy = false; render();
 }
 
 function buildLoading(withName) {
@@ -889,45 +1050,73 @@ function buildLoading(withName) {
 }
 
 function buildInstall() {
-  $root.append(card('ติดตั้งแอปก่อนลงทะเบียน',
-    h('div', null, 'บน iPhone แอปที่อยู่บนหน้าจอโฮมแยกข้อมูลจาก Safari ถ้าลงทะเบียนใน Safari ก่อน ต้องลงทะเบียนใหม่อีกรอบหลังติดตั้ง'),
-    h('ol', null, h('li', null, 'แตะปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ด้านล่าง Safari'), h('li', null, 'เลือก "เพิ่มไปยังหน้าจอโฮม"'), h('li', null, 'เปิดแอป "ลงเวลา" จากไอคอนบนหน้าจอโฮม แล้วค่อยลงทะเบียน'))));
+  $root.append(card('ติดตั้งแอปก่อนสมัคร/เข้าสู่ระบบ',
+    h('div', null, 'ติดตั้งก่อน แล้วค่อยสมัคร/เข้าสู่ระบบจากไอคอน (ถ้าทำใน Safari ก่อน ต้องให้เจ้าของอนุมัติเครื่องซ้ำ เพราะแอปบนหน้าจอโฮมแยกข้อมูลจาก Safari)'),
+    h('ol', null, h('li', null, 'แตะปุ่มแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ด้านล่าง Safari'), h('li', null, 'เลือก "เพิ่มไปยังหน้าจอโฮม"'), h('li', null, 'เปิดแอป "ลงเวลา" จากไอคอนบนหน้าจอโฮม แล้วค่อยสมัคร/เข้าสู่ระบบ'))));
   $root.append(h('button', { class: 'btn link', onclick: () => { sessionStorage.setItem('clock.skipInstall', '1'); render(); } }, 'ใช้ในเบราว์เซอร์ต่อ'));
 }
 
-function buildPick() {
-  $root.append(h('div', { class: 'hdr' }, h('span', null, 'ลงทะเบียนเครื่องนี้')));
-  $root.append(h('div', { class: 'small' }, 'แตะชื่อของคุณ'));
-  if (reg.err) $root.append(h('div', { class: 'err' }, reg.err));
-  const g = h('div', { class: 'names' });
-  const list = Object.entries(D.staff || {}).filter(([, s]) => s && s.active === true).sort((a, b) => a[1].nickname.localeCompare(b[1].nickname, 'th'));
-  for (const [sid, s] of list) g.append(h('button', { onclick: () => { reg = { step: 'pin', sid, pin: '', err: '' }; render(); } }, s.nickname));
-  $root.append(g);
-  if (!list.length) $root.append(card('ยังไม่มีรายชื่อพนักงาน', h('div', null, 'แจ้งเจ้าของร้านให้เพิ่มชื่อก่อน')));
+/** ช่องกรอก: ค่าเก็บใน af ตลอด (หน้าจอไม่ถูกวาดใหม่ระหว่างพิมพ์) */
+function fld(label, key, o) {
+  const opts = o || {};
+  const inp = h('input', { class: 'fld', id: 'f_' + key, type: opts.pw ? (af.show ? 'text' : 'password') : 'text', maxlength: opts.max || 60, autocomplete: opts.ac || 'off', autocapitalize: 'none', spellcheck: 'false', '.value': af[key] || '' });
+  inp.addEventListener('input', () => { af[key] = key === 'u' || key === 'old' ? inp.value.toLowerCase() : inp.value; if (key === 'u' || key === 'old') inp.value = af[key]; });
+  if (opts.enter) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') opts.enter(); });
+  return h('label', { class: 'flabel' }, label, inp);
 }
-
-function buildPin() {
-  const s = (D.staff || {})[reg.sid];
-  $root.append(h('div', { class: 'hdr' }, h('span', null, 'สวัสดี ' + (s ? s.nickname : ''))));
-  $root.append(h('div', { class: 'small', style: 'text-align:center' }, 'ใส่รหัส 4 หลัก'));
-  const dots = h('div', { class: 'dots' }, [0, 1, 2, 3].map((i) => h('i', { class: i < reg.pin.length ? 'on' : '' })));
-  $root.append(dots, h('div', { class: 'err' }, reg.err));
-  const pad = h('div', { class: 'pad' });
-  const press = (k) => {
-    if (k === 'del') reg.pin = reg.pin.slice(0, -1);
-    else if (reg.pin.length < 4) reg.pin += k;
-    if (reg.pin.length === 4) { reg.step = 'loc'; }
-    render();
-  };
-  for (const k of ['1', '2', '3', '4', '5', '6', '7', '8', '9']) pad.append(h('button', { onclick: () => press(k) }, k));
-  pad.append(h('button', { class: 'x', onclick: () => { reg = { step: 'pick', sid: null, pin: '', err: '' }; render(); } }, '←'), h('button', { onclick: () => press('0') }, '0'), h('button', { class: 'x', onclick: () => press('del') }, '⌫'));
-  $root.append(pad);
+function buildAuth() {
+  $root.append(h('div', { class: 'hdr' }, h('span', null, 'ลงเวลา อึ้งลักเส็ง')));
+  if (af.step === 'loc') return buildLocExplain();
+  const tabs = h('div', { class: 'tabs2' },
+    h('button', { class: af.tab === 'login' ? 'on' : '', id: 'tabLogin', onclick: () => { afReset('login'); render(); } }, 'เข้าสู่ระบบ'),
+    h('button', { class: af.tab === 'signup' ? 'on' : '', id: 'tabSignup', onclick: () => { afReset('signup'); render(); } }, 'สมัครใช้งาน'));
+  $root.append(tabs);
+  const show = h('label', { class: 'chk' }, h('input', { type: 'checkbox', id: 'showPw', '.checked': af.show, onchange: (e) => { af.show = e.target.checked; render(); } }), 'แสดงรหัสผ่าน');
+  if (af.tab === 'login') {
+    $root.append(fld('ชื่อผู้ใช้', 'u', { max: 20, ac: 'username', enter: () => $('#f_pw')?.focus() }), fld('รหัสผ่าน', 'pw', { pw: true, ac: 'current-password', enter: doLogin }), show);
+    $root.append(h('div', { class: 'err', id: 'authErr' }, af.err));
+    $root.append(h('button', { class: 'btn', id: 'loginBtn', disabled: af.busy, onclick: doLogin }, af.busy ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'));
+    $root.append(h('button', { class: 'btn link', id: 'forgotBtn', onclick: () => { afReset('forgot'); render(); } }, 'ลืมรหัสผ่าน?'));
+  } else {
+    if (af.tab === 'forgot') $root.append(card(null, h('div', null, 'สมัครชื่อผู้ใช้ใหม่ (ห้ามซ้ำชื่อเดิม) แล้วเจ้าของจะเชื่อมกับประวัติเดิมให้')));
+    $root.append(fld('ชื่อผู้ใช้ (a-z 0-9 _ 3-20 ตัว)', 'u', { max: 20, ac: 'username' }), fld('ชื่อเล่น', 'nick', { max: 20, ac: 'nickname' }));
+    if (af.tab === 'forgot') $root.append(fld('ชื่อผู้ใช้เดิม (ถ้าจำได้)', 'old', { max: 20 }));
+    $root.append(fld('รหัสผ่าน (อย่างน้อย ' + PW_MIN + ' ตัว)', 'pw', { pw: true, ac: 'new-password' }), fld('รหัสผ่านอีกครั้ง', 'pw2', { pw: true, ac: 'new-password', enter: startSignup }), show);
+    $root.append(h('div', { class: 'err', id: 'authErr' }, af.err));
+    $root.append(h('button', { class: 'btn', id: 'signupBtn', disabled: af.busy, onclick: startSignup }, 'ต่อไป'));
+    if (af.tab === 'forgot') $root.append(h('button', { class: 'btn link', onclick: () => { afReset('login'); render(); } }, '← กลับไปเข้าสู่ระบบ'));
+    $root.append(h('div', { class: 'small', style: 'margin-top:8px' }, 'ห้ามบอกรหัสผ่านให้ใคร'));
+  }
 }
-
-function buildLoc() {
+function buildLocExplain() {
   $root.append(card('ขออนุญาตใช้ตำแหน่ง', h('div', null, 'ร้านใช้ตำแหน่งเฉพาะตอนกดปุ่ม เพื่อยืนยันว่าอยู่ที่ร้าน')));
-  $root.append(h('button', { class: 'btn', onclick: async () => { try { await gp({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }); } catch (_) { } submitRegistration(); } }, 'อนุญาต แล้วส่งคำขอ'));
-  $root.append(h('button', { class: 'btn link', onclick: () => submitRegistration() }, 'ข้ามไปก่อน'));
+  $root.append(h('div', { class: 'err' }, af.err));
+  $root.append(h('button', { class: 'btn', id: 'locAllow', disabled: af.busy, onclick: async () => { try { await gp({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }); } catch (_) { } doSignup(); } }, 'อนุญาต แล้วสมัคร'));
+  $root.append(h('button', { class: 'btn link', id: 'locSkip', disabled: af.busy, onclick: () => doSignup() }, 'ข้ามไปก่อน'));
+  $root.append(h('button', { class: 'btn link', onclick: () => { af.step = null; render(); } }, '← กลับ'));
+}
+function buildNeedRequest() {
+  const dr = lsJson('clock.draft') || {};
+  if (!af.nick && dr.nickname) af.nick = dr.nickname;
+  $root.append(h('div', { class: 'hdr' }, h('span', null, 'สวัสดี ' + usernameOf(user))));
+  $root.append(card('ส่งคำขอสมัครให้เจ้าของ', h('div', null, 'ยังไม่ได้ส่งคำขอ ใส่ชื่อเล่นแล้วกดส่ง')));
+  $root.append(fld('ชื่อเล่น', 'nick', { max: 20 }), h('div', { class: 'err', id: 'authErr' }, af.err));
+  $root.append(h('button', { class: 'btn', id: 'needSend', disabled: af.busy, onclick: sendNeedRequest }, 'ส่งคำขอให้เจ้าของ'), logoutBtn());
+}
+function buildWaitAccount() {
+  const pend = myPend();
+  $root.append(card('ส่งคำขอแล้ว รอเจ้าของอนุมัติ', h('div', null, 'เมื่ออนุมัติแล้วหน้านี้จะเปลี่ยนเอง'), D.info && pend && D.info.did !== pend.did ? h('div', { class: 'small', style: 'margin-top:8px' }, 'คำขอนี้ส่งจากมือถือเครื่องอื่น') : null, af.err && h('div', { class: 'err' }, af.err)));
+  if (D.info && (!pend || D.info.did !== pend.did)) $root.append(h('button', { class: 'btn blue', id: 'resendHere', disabled: af.busy, onclick: () => { af.nick = D.info.nickname || ''; sendNeedRequestAfterReject(); } }, 'ส่งจากเครื่องนี้แทน'));
+  $root.append(logoutBtn());
+}
+function buildDeviceAsk(replaced) {
+  const has = acct && acct.s.deviceId;
+  $root.append(h('div', { class: 'hdr' }, h('span', null, 'สวัสดี ' + (acct ? acct.s.nickname : ''))));
+  $root.append(card(replaced ? 'มีการอนุมัติมือถือเครื่องอื่นแทนเครื่องนี้แล้ว' : 'มือถือเครื่องนี้ยังไม่ได้ผูกกับบัญชีของคุณ',
+    h('div', null, replaced ? 'ถ้าต้องการใช้เครื่องนี้ ให้ขอใช้เครื่องนี้แทน' : 'ต้องให้เจ้าของอนุมัติเครื่องนี้ก่อนจึงจะลงเวลาได้'),
+    has && !replaced ? h('div', { class: 'small', style: 'margin-top:8px' }, 'ถ้าขอใช้เครื่องนี้ เครื่องเดิมจะลงเวลาไม่ได้') : null,
+    af.err && h('div', { class: 'err' }, af.err)));
+  $root.append(h('button', { class: 'btn', id: 'reqDevice', disabled: af.busy, onclick: sendDeviceRequest }, replaced ? 'ขอใช้เครื่องนี้แทน' : 'ขอใช้เครื่องนี้'), logoutBtn());
 }
 
 function buildMain() {
@@ -938,6 +1127,8 @@ function buildMain() {
   ui.offline = h('div', { class: 'bar y' }, 'ไม่มีอินเทอร์เน็ต — ต่อเน็ตแล้วกดใหม่');
   ui.offline.classList.toggle('hidden', connected);
   $root.append(ui.offline);
+  ui.devWarn = h('div', { class: 'bar y hidden', id: 'devWarn' }, 'มีคนขอใช้บัญชีของคุณบนมือถือเครื่องอื่น — ถ้าไม่ใช่คุณ แจ้งเจ้าของทันที');
+  $root.append(ui.devWarn);
   ui.live = h('div', { class: 'bar' });
   $root.append(ui.live);
   if (permState === 'prompt' || permState === 'unknown') {
@@ -984,6 +1175,7 @@ function updateDynamic() {
   ui.live.className = cls; ui.live.textContent = txt;
 
   ui.offline.classList.toggle('hidden', connected);
+  { const dv = myDev(); ui.devWarn.classList.toggle('hidden', !(D.info && D.info.kind === 'device' && D.info.status === 'pending' && dv && D.info.did !== dv.did)); }
 
   // ปุ่มหลัก
   const brkMs = (() => { const s = summarize(D.logs); return s.breakMs + (s.openBreak != null ? now - s.openBreak : 0); })();
@@ -1044,11 +1236,12 @@ setInterval(() => {
 setInterval(() => { if (currentView() === 'MAIN') updateDynamic(); }, 5000);
 
 onAuthStateChanged(auth, async (u) => {
-  if (!u) { try { await signInAnonymously(auth); } catch (e) { $root.append(card('เชื่อมต่อไม่ได้', h('div', null, 'ตรวจอินเทอร์เน็ต แล้วเปิดแอปใหม่'))); } return; }
+  authReady = true;
+  if (!u) { teardownUser(); render(); return; }
   if (user && user.uid === u.uid) return;
+  teardownUser();
   user = u;
-  attachUser();
-  initPermission();
+  if (isStaffUser(u)) { attachUser(); initPermission(); }
   render();
 });
 

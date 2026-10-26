@@ -1,5 +1,5 @@
 // Service worker ของแอปพนักงาน (clock.html)  อัปเดตเวอร์ชัน: เพิ่มเลข CACHE_VERSION
-const CACHE_VERSION = 'clock-v1';
+const CACHE_VERSION = 'clock-v2';
 const SDK_CACHE = 'clock-sdk-v1';
 const PRECACHE = ['./clock.html', './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 
