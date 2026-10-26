@@ -132,11 +132,14 @@ tr.locked td{background:#f3f4f6;color:#6b7280}
 <div id="modalbg" class="hidden"><div id="modal"></div></div>
 
 <script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
-import { getAuth, setPersistence, browserSessionPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator }
-  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
-import { getDatabase, ref, onValue, get, update, set, remove, push, serverTimestamp, connectDatabaseEmulator, query, orderByKey, orderByChild, startAt, endAt, limitToLast, equalTo }
-  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js';
+// โหมดเดโม (?demo=1): ใช้ฐานข้อมูลจำลองในเครื่องแทน Firebase ดู demo.html ถ้าไม่มี ?demo=1 โค้ดเดโมไม่ถูกโหลดและใช้ Firebase SDK ตามเดิม
+const DEMO = new URLSearchParams(location.search).get('demo') === '1';
+const FBM = DEMO ? await import('./demo/firebase-demo.mjs') : null;
+const [{ initializeApp }, { getAuth, setPersistence, browserSessionPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator }, { getDatabase, ref, onValue, get, update, set, remove, push, serverTimestamp, connectDatabaseEmulator, query, orderByKey, orderByChild, startAt, endAt, limitToLast, equalTo }] = FBM ? [FBM, FBM, FBM] : await Promise.all([
+  import('https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js'),
+  import('https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js'),
+  import('https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js')
+]);
 
 /* ====== ตั้งค่า Firebase (เจ้าของใส่เอง ดู README ข้อ 7) ====== */
 const FIREBASE_CONFIG = {
@@ -148,7 +151,7 @@ const FIREBASE_CONFIG = {
 };
 
 const EMU = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).get('emu') === '1';
-const CONFIG_MISSING = !EMU && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
+const CONFIG_MISSING = !EMU && !DEMO && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
 const IDLE_MS = 30 * 60 * 1000;
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -430,7 +433,8 @@ if (CONFIG_MISSING) {
 }
 
 // ใช้ชื่อ app 'master' แยกจาก clock.html เพื่อไม่ให้แชร์ auth/ตัวตนเครื่องพนักงานเมื่อเปิดบน origin เดียวกัน
-const app = initializeApp(EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG, 'master');
+if (DEMO) FBM.mountBanner('master');
+const app = initializeApp(DEMO ? { demo: true } : EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG, 'master');
 const auth = getAuth(app);
 const db = getDatabase(app);
 if (EMU) { connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true }); connectDatabaseEmulator(db, '127.0.0.1', 9000); }
@@ -446,6 +450,7 @@ const bangkokDate = (ms) => bkkDateF.format(ms);
 function fmtMin(totalMin) { totalMin = Math.max(0, Math.round(totalMin)); const hh = Math.floor(totalMin / 60), mm = totalMin % 60; return hh ? `${hh} ชม. ${String(mm).padStart(2, '0')} น.` : `${mm} นาที`; }
 function fmtClock(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
 async function sha256Hex(text) {
+  if (DEMO && !(window.crypto && crypto.subtle)) return FBM.sha256Hex(text);   // เดโมบนหน้า http
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }

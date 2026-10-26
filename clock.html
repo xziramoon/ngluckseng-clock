@@ -80,11 +80,14 @@ textarea.rt{font:inherit;font-size:21px;width:100%;min-height:80px;padding:10px;
 <noscript>ต้องเปิดใช้งาน JavaScript</noscript>
 
 <script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
-import { getAuth, setPersistence, indexedDBLocalPersistence, signInAnonymously, onAuthStateChanged, connectAuthEmulator }
-  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
-import { getDatabase, ref, onValue, get, set, remove, update, push, serverTimestamp, connectDatabaseEmulator, query, orderByChild, equalTo }
-  from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js';
+// โหมดเดโม (?demo=1): ใช้ฐานข้อมูลจำลองในเครื่องแทน Firebase ดู demo.html ถ้าไม่มี ?demo=1 โค้ดเดโมไม่ถูกโหลดและใช้ Firebase SDK ตามเดิม
+const DEMO = new URLSearchParams(location.search).get('demo') === '1';
+const FBM = DEMO ? await import('./demo/firebase-demo.mjs') : null;
+const [{ initializeApp }, { getAuth, setPersistence, indexedDBLocalPersistence, signInAnonymously, onAuthStateChanged, connectAuthEmulator }, { getDatabase, ref, onValue, get, set, remove, update, push, serverTimestamp, connectDatabaseEmulator, query, orderByChild, equalTo }] = FBM ? [FBM, FBM, FBM] : await Promise.all([
+  import('https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js'),
+  import('https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js'),
+  import('https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js')
+]);
 
 /* ====== ตั้งค่า Firebase (เจ้าของใส่เอง ดู README ข้อ 7) ====== */
 const FIREBASE_CONFIG = {
@@ -96,9 +99,10 @@ const FIREBASE_CONFIG = {
 };
 
 const EMU = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).get('emu') === '1';
-const CONFIG_MISSING = !EMU && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
+const CONFIG_MISSING = !EMU && !DEMO && Object.values(FIREBASE_CONFIG).some((v) => !v || v === 'PASTE_HERE');
 
 const $root = document.getElementById('root');
+if (DEMO) FBM.mountBanner('clock', () => { stopWatch(); liveFix = null; if (typeof initPermission === 'function') initPermission(); });
 const $ = (s, r = document) => r.querySelector(s);
 /** สร้าง element ด้วย textContent เท่านั้น (ห้ามใช้ innerHTML กับข้อมูลจาก DB) */
 function h(tag, attrs, ...kids) {
@@ -225,13 +229,13 @@ if (CONFIG_MISSING) {
   $root.append(card('ยังไม่ได้ตั้งค่า Firebase', h('div', null, 'ดูวิธีตั้งค่าในไฟล์ README')));
   throw new Error('FIREBASE_CONFIG ยังไม่ได้ตั้งค่า');
 }
-if (!window.isSecureContext || !('geolocation' in navigator)) {
+if ((!window.isSecureContext && !DEMO) || !('geolocation' in navigator)) {
   $root.append(card('เปิดแอปไม่ได้', h('div', null, 'เปิดจากลิงก์ที่ร้านส่งให้ (https) ด้วย Chrome หรือ Safari')));
   throw new Error('unsupported');
 }
 
 /* ====== Firebase ====== */
-const app = initializeApp(EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG);
+const app = initializeApp(DEMO ? { demo: true } : EMU ? { apiKey: 'demo-key', projectId: 'demo-clock', databaseURL: 'https://demo-clock-default-rtdb.firebaseio.com' } : FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db = getDatabase(app);
 if (EMU) { connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true }); connectDatabaseEmulator(db, '127.0.0.1', 9000); }
@@ -239,7 +243,7 @@ const A = (p) => ref(db, 'attendance/' + p);
 try { await setPersistence(auth, indexedDBLocalPersistence); } catch (_) { /* ใช้ค่าเริ่มต้น */ }
 try { navigator.storage?.persist?.(); } catch (_) { }
 
-if ('serviceWorker' in navigator && !EMU) navigator.serviceWorker.register('./sw.js').catch(() => { });
+if ('serviceWorker' in navigator && !EMU && !DEMO) navigator.serviceWorker.register('./sw.js').catch(() => { });
 
 /* ====== เวลา ====== */
 let serverOffset = 0;
@@ -253,6 +257,7 @@ function fmtClock(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${
 function fmtMin(m) { m = Math.max(0, Math.round(m)); const hh = Math.floor(m / 60), mm = m % 60; return hh ? `${hh} ชม. ${String(mm).padStart(2, '0')} น.` : `${mm} นาที`; }
 const fmtDist = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)} กม.` : `${Math.round(m)} ม.`);
 async function sha256Hex(text) {
+  if (DEMO && !(window.crypto && crypto.subtle)) return FBM.sha256Hex(text);   // เดโมบนหน้า http
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -374,7 +379,8 @@ function geoErr(e) {
   if (e && e.code === 2) return { title: 'หาตำแหน่งไม่ได้', text: 'เปิด "ตำแหน่ง" ของมือถือ แล้วกดใหม่' };
   return { title: 'หาตำแหน่งนานเกินไป', text: 'ออกไปใกล้ประตูหรือที่โล่ง แล้วกดใหม่' };
 }
-const gp = (opts) => new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, opts));
+const GEO = DEMO ? FBM.demoGeo : navigator.geolocation;      // เดโม: จำลองตำแหน่งได้ (เลือกที่แถบด้านบน)
+const gp = (opts) => new Promise((res, rej) => GEO.getCurrentPosition(res, rej, opts));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** เก็บตัวอย่างตำแหน่งสูงสุด 12 วิ เลือกค่าที่ accuracy ดีสุด */
@@ -395,15 +401,16 @@ async function sampleFix() {
 
 /* ----- แถบระยะสด ----- */
 function startWatch() {
-  if (watchId != null || !navigator.geolocation) return;
-  watchId = navigator.geolocation.watchPosition((p) => {
+  if (watchId != null || !GEO) return;
+  watchId = GEO.watchPosition((p) => {
     liveFix = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
     fixLog.push(liveFix); if (fixLog.length > 20) fixLog.shift();
     updateDynamic();
   }, () => { }, { enableHighAccuracy: true, maximumAge: 5000 });
 }
-function stopWatch() { if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; } }
+function stopWatch() { if (watchId != null) { GEO.clearWatch(watchId); watchId = null; } }
 async function initPermission() {
+  if (DEMO && FBM.demoGpsMode() !== 'real') { permState = 'granted'; startWatch(); render(); return; }
   try {
     if (!navigator.permissions?.query) { permState = 'prompt'; return; }
     const st = await navigator.permissions.query({ name: 'geolocation' });
