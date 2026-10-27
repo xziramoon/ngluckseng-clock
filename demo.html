@@ -20,16 +20,43 @@ code{background:#f3f4f6;padding:1px 6px;border-radius:6px;font-size:17px}
 ol{padding-left:22px;margin:0}li{margin:8px 0;line-height:1.5}
 .small{font-size:15px;color:#4b5563}
 #msg{font-weight:700;color:#166534;min-height:1.4em;margin-top:6px}
+/* หน้าเดียว: แท็บสลับพนักงาน/เจ้าของ ทั้งสองฝั่งเปิดค้างไว้ จึงเห็นข้อมูลกันทันที */
+html,body{height:100%}
+body{display:flex;flex-direction:column}
+#tabs{display:flex;gap:4px;background:#111827;padding:6px;position:sticky;top:0;z-index:5}
+#tabs button{flex:1;border:0;border-radius:10px;padding:10px 4px;font:700 17px system-ui,sans-serif;background:#374151;color:#e5e7eb;cursor:pointer;min-height:48px}
+#tabs button[aria-selected="true"]{background:#fff;color:#111827}
+#tabs .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#f59e0b;margin-left:6px;vertical-align:middle;visibility:hidden}
+#tabs .dot.on{visibility:visible}
+#panes{flex:1;display:flex;min-height:0}
+.pane{flex:1;min-width:0;display:none;overflow:auto}
+.pane.on{display:block}
+.pane iframe{border:0;width:100%;height:100%;display:block;background:#fff}
+@media (min-width:1000px){
+  #tabs button[data-p="clock"],#tabs button[data-p="master"]{display:none}
+  #tabs::before{content:"แอปพนักงาน (ซ้าย) และหน้าเจ้าของ (ขวา) ใช้ข้อมูลชุดเดียวกัน";color:#e5e7eb;font-size:15px;align-self:center;padding:0 8px;flex:2}
+  #panes.split #p-clock,#panes.split #p-master{display:block}
+  #panes.split #p-clock{flex:0 0 420px;border-right:4px solid #111827}
+  #panes.split #p-help{display:none}
+}
 </style>
 </head>
 <body>
+<nav id="tabs" role="tablist">
+  <button data-p="clock" role="tab" aria-selected="true">📱 พนักงาน<span class="dot" id="dot-clock"></span></button>
+  <button data-p="master" role="tab" aria-selected="false">🏪 เจ้าของ<span class="dot" id="dot-master"></span></button>
+  <button data-p="help" role="tab" aria-selected="false">ℹ️ วิธีลอง</button>
+</nav>
+<div id="panes" class="split">
+<section class="pane on" id="p-clock"><iframe title="แอปพนักงาน (เดโม)" src="./clock.html?demo=1" allow="geolocation"></iframe></section>
+<section class="pane" id="p-master"><iframe title="หน้าเจ้าของ (เดโม)" src="./clock-master.html?demo=1"></iframe></section>
+<section class="pane" id="p-help">
 <main>
   <h1>เดโมระบบลงเวลา อึ้งลักเส็ง</h1>
   <div class="warn">โหมดทดสอบ — ข้อมูลอยู่ในเครื่องนี้เท่านั้น ไม่ได้ตรวจสิทธิ์ของ Firebase ไม่ต้องมีโปรเจกต์ Firebase ใช้ลองกดเข้างาน/พัก/ออกงานได้ทันที</div>
 
-  <a class="big green" id="goClock" href="./clock.html?demo=1">เปิดแอปพนักงาน (เดโม)</a>
-  <a class="big blue" id="goMaster" href="./clock-master.html?demo=1">เปิดหน้าเจ้าของ (เดโม)</a>
-  <p class="small">แนะนำให้เปิดทั้งสองหน้าเป็น <b>สองแท็บในเบราว์เซอร์เดียวกัน</b> บนมือถือเครื่องนี้ (กดค้างที่ปุ่มแล้วเลือก "เปิดในแท็บใหม่") หน้าเจ้าของจะเห็นสิ่งที่พนักงานกดทันทีโดยไม่ต้องรีเฟรช</p>
+  <p class="small">หน้านี้รวม <b>แอปพนักงาน</b> กับ <b>หน้าเจ้าของ</b> ไว้ด้วยกัน กดแท็บด้านบนเพื่อสลับ (จอคอมแสดงคู่กัน) ทั้งสองฝั่งใช้ข้อมูลชุดเดียวกัน พนักงานกดอะไร หน้าเจ้าของเห็นทันที จุดสีส้มบนแท็บ = อีกฝั่งมีอะไรเปลี่ยน</p>
+  <p class="small">อยากเปิดแยกเต็มจอ: <a href="./clock.html?demo=1">แอปพนักงาน</a> · <a href="./clock-master.html?demo=1">หน้าเจ้าของ</a> (ต้องเปิดในเบราว์เซอร์เดียวกันของเครื่องเดียวกัน)</p>
 
   <div class="card">
     <h2>บัญชีเดโม</h2>
@@ -68,6 +95,40 @@ ol{padding-left:22px;margin:0}li{margin:8px 0;line-height:1.5}
     <div id="msg" role="status"></div>
   </div>
 </main>
+</section>
+</div>
+<script type="module">
+const tabs = [...document.querySelectorAll('#tabs button')];
+function show(p) {
+  document.getElementById('panes').classList.toggle('split', p !== 'help');
+  for (const b of tabs) b.setAttribute('aria-selected', String(b.dataset.p === p));
+  for (const el of document.querySelectorAll('.pane')) el.classList.toggle('on', el.id === 'p-' + p);
+  const d = document.getElementById('dot-' + p); if (d) d.classList.remove('on');
+  if (p === 'help' && innerWidth >= 1000) document.getElementById('panes').classList.remove('split');
+}
+let cur = 'clock';
+const helpBtn = document.querySelector('#tabs button[data-p="help"]');
+for (const b of tabs) b.addEventListener('click', () => {
+  // จอคอมซ่อนแท็บพนักงาน/เจ้าของ (แสดงคู่กันอยู่แล้ว) ปุ่มวิธีลองจึงสลับไป-กลับ
+  const p = b.dataset.p === 'help' && cur === 'help' ? 'clock' : b.dataset.p;
+  cur = p; show(p);
+  helpBtn.textContent = p === 'help' && innerWidth >= 1000 ? '← กลับไปหน้าพนักงาน/เจ้าของ' : 'ℹ️ วิธีลอง';
+});
+// ข้อมูลเดโมเปลี่ยน (อีกฝั่งกด) → จุดสีส้มบนแท็บที่ซ่อนอยู่
+try {
+  const bc = new BroadcastChannel('clockdemo.channel');
+  bc.onmessage = () => { for (const p of ['clock', 'master']) if (!document.getElementById('p-' + p).classList.contains('on') && innerWidth < 1000) document.getElementById('dot-' + p).classList.add('on'); };
+} catch (_) { }
+// ลิงก์ "หน้าเดโม" ในแถบส้มของหน้าใน iframe ให้เปิดแท็บวิธีลองแทนการโหลดหน้าซ้อน
+// (แถบส้มสร้างหลังโหลด จึงดักที่ document ของ iframe แทนการผูกกับลิงก์ตรงๆ)
+function hookFrame(f) {
+  try {
+    const d = f.contentDocument; if (!d || d.__demoHooked) return; d.__demoHooked = true;
+    d.addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('a[href="./demo.html"]'); if (a) { e.preventDefault(); if (cur !== 'help') helpBtn.click(); } }, true);
+  } catch (_) { }
+}
+for (const f of document.querySelectorAll('iframe')) { f.addEventListener('load', () => hookFrame(f)); hookFrame(f); }
+</script>
 <script type="module">
 document.getElementById('resetBtn').addEventListener('click', async () => {
   if (!confirm('ล้างข้อมูลเดโมทั้งหมดในเครื่องนี้ใช่ไหม')) return;
