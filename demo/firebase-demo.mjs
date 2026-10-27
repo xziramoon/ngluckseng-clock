@@ -14,7 +14,7 @@
 }
 const KEY = 'clockdemo.db.v1';
 const CH = 'clockdemo.channel';
-export const DEMO_ADMIN = { email: 'admin@demo', password: 'demo1234', uid: 'demoAdminUid000000000000000000' };
+export const DEMO_ADMIN = { login: 'admin', email: 'admin@demo', password: 'admin', uid: 'demoAdminUid000000000000000000' };
 export const DEMO_DOMAIN = '@staff.ngluckseng.invalid';
 // บัญชีพนักงานตัวอย่าง (Auth v2): ชื่อผู้ใช้/รหัสผ่าน ดู docs/plan-auth-v2.md ข้อ 9
 export const DEMO_STAFF = [
@@ -261,9 +261,11 @@ export function signInAnonymously(a) {
   a._set(u); return Promise.resolve({ user: u });
 }
 export function signInWithEmailAndPassword(a, email, password) {
-  const em = String(email).trim().toLowerCase();
+  let em = String(email).trim().toLowerCase();
+  if (em === DEMO_ADMIN.login) em = DEMO_ADMIN.email;   // เดโม: เจ้าของพิมพ์แค่ admin ได้ (ชั่วคราวเพื่อทดสอบ)
   const rec = (load().__users || {})[em];
-  if (!rec || rec.password !== password) return Promise.reject(authErr('auth/invalid-credential'));
+  const pwOk = em === DEMO_ADMIN.email ? password === DEMO_ADMIN.password : rec && rec.password === password;   // ข้อมูลเดโมเก่าใน localStorage ยังเก็บรหัสเดิม
+  if (!rec || !pwOk) return Promise.reject(authErr('auth/invalid-credential'));
   const u = { uid: rec.uid, isAnonymous: false, email: em };
   a._set(u); return Promise.resolve({ user: u });
 }
@@ -356,10 +358,11 @@ export function mountBanner(kind, onGps) {
   if (kind === 'master') {
     const form = document.getElementById('loginForm');
     if (form) {
-      const hint = el('div', 'background:#fef3c7;color:#92400e;padding:8px 10px;border-radius:8px;margin:10px 0;font-size:14px', `บัญชีเดโม: ${DEMO_ADMIN.email} / รหัสผ่าน ${DEMO_ADMIN.password}`);
+      const hint = el('div', 'background:#fef3c7;color:#92400e;padding:8px 10px;border-radius:8px;margin:10px 0;font-size:14px', `บัญชีเดโม: ${DEMO_ADMIN.login} / รหัสผ่าน ${DEMO_ADMIN.password}`);
       hint.id = 'demoHint'; form.before(hint);
-      const em = document.getElementById('em'), pw = document.getElementById('pw');
-      if (em) em.value = DEMO_ADMIN.email; if (pw) pw.value = DEMO_ADMIN.password;
+      const em = document.getElementById('em'), pw = document.getElementById('pw'), lb = document.querySelector('label[for="em"]');
+      if (lb) lb.textContent = 'ชื่อผู้ใช้';
+      if (em) { em.type = 'text'; em.value = DEMO_ADMIN.login; } if (pw) pw.value = DEMO_ADMIN.password;
     }
   }
   return bar;
